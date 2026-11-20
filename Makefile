@@ -26,7 +26,7 @@ shot: build
 	./$(BIN) -desktop -screenshot docs/vr-hero.png -frames 700 -seed 9 -vrcam -title=false
 
 win: build
-	./$(BIN) -desktop -screenshot docs/vr-win.png -frames 200 -seed 9 -vrcam -title=false -demo won
+	./$(BIN) -desktop -screenshot docs/vr-win.png -frames 40 -seed 9 -vrcam -title=false -demo won -fire
 
 lose: build
 	./$(BIN) -desktop -screenshot docs/vr-lose.png -frames 200 -seed 9 -vrcam -title=false -demo lost
@@ -51,7 +51,7 @@ vet:
 
 # The HUD and the overlays draw from a ~14 KB glyph subset of Source Han Sans
 # CN (OFL-1.1). Regenerate it after changing any on-screen string.
-HUD_CHARS := 祖玛分数关卡第通过游戏结束胜利重新开始连击最高分下发射瞄准继续并命中剩余暂停点击扳机左键球速新纪录危险快吃掉了洞口或按得零一二三四五六七八九十加载球链神庙空格跳开始abcdefghijklmnopqrstuvwxyzVR0123456789 .,:+-/%!?
+HUD_CHARS := 祖玛分数关卡第通过游戏结束胜利重新开始连击最高分下发射瞄准继续并命中剩余暂停点击扳机左键球速新纪录危险快吃掉了洞口或按得零一二三四五六七八九十加载球链神庙空格跳开始进入下一abcdefghijklmnopqrstuvwxyzVR0123456789 .,:+-/%!?
 
 font:
 	pyftsubset /usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Bold.otf \

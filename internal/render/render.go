@@ -618,10 +618,27 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		r.meshProg.Float(r.uBall, 0)
 	}
 
+	// The celebration burst: real beads thrown out of the controller, standing
+	// in for a party popper. They fly ballistically and shrink as they die.
+	for _, sp := range g.Sparks {
+		k := 1 - 0.45*sp.Age/game.SparkLife
+		radius := game.BallR * 0.85 * k
+		model := world.
+			Mul4(mgl32.Translate3D(sp.Pos.X(), sp.Pos.Y(), sp.Pos.Z())).
+			Mul4(mgl32.Scale3D(radius, radius, radius))
+		c := ballColor(sp.Colour)
+		r.meshProg.Mat4(r.uModel, model)
+		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
+		r.meshProg.Float(r.uBall, 1)
+		r.meshProg.Float(r.uGloss, 0.0)
+		r.meshProg.Mat3(r.uBallRot, mat3Mul(rotAxis(mgl32.Vec3{0.3, 1, 0.5}, sp.Age*26), randomBallRot(sp.Colour+3)))
+		r.ball.draw()
+		r.meshProg.Float(r.uBall, 0)
+	}
+
 	if handOK {
 		r.drawController(hand)
 	}
-
 	// The player is the launcher: a beam leaves the controller and a bead
 	// waits at its tip.
 	if aimOK {
@@ -841,6 +858,8 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now fl
 	case game.StateWon:
 		r.drawText(vp, overlay, 0, 1.06, 64, fmt.Sprintf("第 %d 关 通过!", g.Level), alignCenter, rgba(1.0, 0.93, 0.55, 1))
 		r.drawText(vp, overlay, 0, 0.74, 44, fmt.Sprintf("得分 %d", g.Score), alignCenter, rgba(1, 1, 1, 0.96))
+		hint := 0.72 + 0.28*float32(math.Sin(now*3.4))
+		r.drawText(vp, overlay, 0, 0.46, 34, "按 扳机 进入下一关", alignCenter, rgba(1, 1, 1, hint))
 	case game.StateLost:
 		if g.LoseReady() {
 			pulse := 0.80 + 0.20*float32(math.Sin(now*4))

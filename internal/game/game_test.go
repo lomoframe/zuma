@@ -158,7 +158,7 @@ func TestBallReachingHoleLoses(t *testing.T) {
 	}
 }
 
-func TestClearBoardWinsAndAdvances(t *testing.T) {
+func TestClearBoardWinsAndWaits(t *testing.T) {
 	g := New(1)
 	g.Balls = nil
 	g.Queue = nil
@@ -171,8 +171,12 @@ func TestClearBoardWinsAndAdvances(t *testing.T) {
 	for i := 0; i < 300; i++ {
 		g.Update(1.0 / 60.0)
 	}
+	if g.Level != lvl || g.State != StateWon {
+		t.Fatalf("win screen moved on by itself: level %d state %v", g.Level, g.State)
+	}
+	g.NextLevel()
 	if g.Level != lvl+1 || g.State != StatePlaying {
-		t.Fatalf("win did not advance: level %d state %v", g.Level, g.State)
+		t.Fatalf("next level did not load: level %d state %v", g.Level, g.State)
 	}
 }
 

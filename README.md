@@ -47,6 +47,7 @@ the right hand and its beam.)*
 | Aim | Point the right controller | Move the mouse over the board |
 | Fire | Right trigger | Left click / `Space` |
 | Restart after a loss | Right trigger | `R` |
+| Load the next level after a win | Right trigger | `Space` / left click |
 | Raise / lower the whole scene | Right stick up / down | — |
 | Tilt the board | Left stick up / down (up = flatter) | — |
 | Quit | SteamVR menu | `Esc` |
@@ -71,7 +72,10 @@ beam on purpose — the beam itself stops on the bead it will hit.
   can pull the next beads into a new match — chain reactions come from there.
 - The launcher only hands you colours that are **still on the chain**; a colour
   that has been cleared completely is not dealt until it spawns again.
-- Losing: the chain's head reaches the hole. Winning: board and queue empty.
+- Losing: the chain's head reaches the hole. Winning: board and queue empty —
+  the round then waits for you. The trigger works the celebration popper: thirty
+  beads of every colour shoot out along your aim ray in a 20° cone with a bang,
+  bounce across the felt, and the next level loads a moment later.
 
 ## Build and run
 
@@ -152,6 +156,8 @@ changing any on-screen text.
 - **场景**：盘面立在面前的桌上，像弹球台一样后仰 20°；标题页固定在房间里某个
   坐标，转头不会拖着它走。桌面窗口只是左眼的调试镜像。
 - 右手摇杆上下推可以整体升降场景（桌子、盘面、HUD 一起动，±0.65/0.85 m）；左手摇杆上下调盘面倾角（向上更平、向下更陡，0–35°）。
+- 过关后结算页会等你扣扳机：一击沿射线方向、20° 圆锥内喷出 30 颗各色球（代替礼花筒，
+  伴随一声「砰」），球在毡面上弹跳散开，随后进入下一关。
 - 规则：线路/盘形每关随机（单线螺旋、最多两层环、迷宫/圆弧发卡、波浪发卡、
   方形螺旋、一笔画轮廓），洞口位置随机；插入按命中侧、三消、**连击按每发计**、
   缺口由靠洞口一侧回退合拢、击退随连击级别加重；手上只发链上还有的颜色。

@@ -29,40 +29,41 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn        bool
-	eyes        [2]*gl.RenderTarget
-	board       mgl32.Mat4
-	boardInv    mgl32.Mat4
-	placedBoard game.Board
-	sceneLift   float32 // right stick: whole scene up/down, metres
-	tiltDeg     float32 // left stick: board tilt, degrees
-	lastAimT    float64
-	tableWorld  mgl32.Mat4
-	tilt        mgl32.Mat4
-	prevTrig    bool
-	vrAimOK     bool
-	vrAim       mgl32.Vec2
-	vrDebug     bool
-	vrcam       bool // documentation framing
-	vrFrames    int
-	lastVRLog   float64
-	vrRetryAt   float64
-	vrFailLog   float64
-	aimNote     string
-	aimO        mgl32.Vec3
-	aimD        mgl32.Vec3
-	aimOK       bool
-	aimFlip     bool
-	aimFlipSet  bool
-	flipSum     float32
-	flipN       int
-	aimSmooth   mgl32.Vec3
-	aimSmoothOK bool
-	handPose    mgl32.Mat4
-	handPoseOK  bool
-	lastDev     int
-	modelState  int
-	msaa        int32
+	vrOn         bool
+	eyes         [2]*gl.RenderTarget
+	board        mgl32.Mat4
+	boardInv     mgl32.Mat4
+	placedBoard  game.Board
+	sceneLift    float32 // right stick: whole scene up/down, metres
+	winAdvanceAt float64 // win screen: when the next level loads
+	tiltDeg      float32 // left stick: board tilt, degrees
+	lastAimT     float64
+	tableWorld   mgl32.Mat4
+	tilt         mgl32.Mat4
+	prevTrig     bool
+	vrAimOK      bool
+	vrAim        mgl32.Vec2
+	vrDebug      bool
+	vrcam        bool // documentation framing
+	vrFrames     int
+	lastVRLog    float64
+	vrRetryAt    float64
+	vrFailLog    float64
+	aimNote      string
+	aimO         mgl32.Vec3
+	aimD         mgl32.Vec3
+	aimOK        bool
+	aimFlip      bool
+	aimFlipSet   bool
+	flipSum      float32
+	flipN        int
+	aimSmooth    mgl32.Vec3
+	aimSmoothOK  bool
+	handPose     mgl32.Mat4
+	handPoseOK   bool
+	lastDev      int
+	modelState   int
+	msaa         int32
 }
 
 // aimPitchDeg is how far the shot direction is pitched from the controller's
@@ -209,12 +210,16 @@ func main() {
 	}
 
 	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, _ glfw.ModifierKey) {
+		if *shot != "" {
+			// A screenshot is a fixed frame; a stray click must not restart it.
+			return
+		}
 		if button == glfw.MouseButton1 && action == glfw.Press {
 			if a.r.SplashActive(glfw.GetTime()) {
 				a.r.SplashExit(glfw.GetTime())
 				return
 			}
-			a.fire()
+			a.pressFire(glfw.GetTime())
 		}
 	})
 
@@ -234,7 +239,7 @@ func main() {
 				a.r.SplashExit(glfw.GetTime())
 				return
 			}
-			a.fire()
+			a.pressFire(glfw.GetTime())
 		}
 	})
 
@@ -261,8 +266,16 @@ func main() {
 		}
 		var dt, now float64
 		if *shot != "" {
+			// The screenshot clock counts frames, not wall time: the loop has
+			// to outlive the window's opening animation, but the simulated
+			// moment must stay the one -frames asks for.
 			dt = 1.0 / 60.0
-			now = float64(frame) / 60.0
+			f := frame
+			if f > *frames {
+				f = *frames
+				dt = 0
+			}
+			now = float64(f) / 60.0
 		} else {
 			now = glfw.GetTime()
 			dt = now - last
@@ -285,8 +298,12 @@ func main() {
 			a.updateMouseAim(win)
 		}
 
-		if *shot != "" && *fire && frame == 8 {
-			a.fire()
+		// -fire presses the trigger once, like a player would: a shot while
+		// playing, the celebration burst on the win screen. A loss screen is
+		// left alone, since its press would restart the round.
+		if *shot != "" && *fire && frame == 8 &&
+			(a.g.State == game.StatePlaying || a.g.State == game.StateWon) {
+			a.pressFire(now)
 		}
 		if !a.r.SplashActive(now) {
 			a.g.Update(float32(dt))
@@ -295,6 +312,11 @@ func main() {
 		}
 		if a.g.Board != a.placedBoard {
 			a.placeBoard()
+		}
+		if a.winAdvanceAt > 0 && now >= a.winAdvanceAt {
+			a.winAdvanceAt = 0
+			a.g.NextLevel()
+			a.playEvents()
 		}
 
 		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
@@ -625,15 +647,11 @@ func (a *app) updateVRAim(now float64) {
 	}
 
 	if st.Trigger && !a.prevTrig {
-		switch {
-		case a.r.SplashActive(now):
+		if a.r.SplashActive(now) {
 			// On the title page a trigger pull is "start", not a shot.
 			a.r.SplashExit(now)
-		case a.g.LoseReady():
-			a.g.Restart()
-			a.playEvents()
-		default:
-			a.fire()
+		} else {
+			a.pressFire(now)
 		}
 	}
 	a.prevTrig = st.Trigger
@@ -672,6 +690,25 @@ func (a *app) placeBoard() {
 			bd.W, bd.H, deg, near, centre, far, vrBoardY+a.sceneLift-0.10*vrBoardScale)
 	}
 	a.placedBoard = bd
+}
+
+// pressFire is the single fire button: on the win screen it throws the
+// celebration burst and then loads the next level, after a loss it restarts,
+// otherwise it fires a bead.
+func (a *app) pressFire(now float64) {
+	switch {
+	case a.g.State == game.StateWon:
+		if a.winAdvanceAt == 0 {
+			a.g.LaunchBurst(a.aimO, a.aimD, 30)
+			audio.Play(audio.Firework, 1.0)
+			a.winAdvanceAt = now + 1.2
+		}
+	case a.g.LoseReady():
+		a.g.Restart()
+		a.playEvents()
+	default:
+		a.fire()
+	}
 }
 
 // boardRay converts a world-space ray into board space.
