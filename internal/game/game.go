@@ -401,31 +401,66 @@ func (g *Game) stepChain(dt float32) {
 	}
 	holeS := g.Path.Len
 
-	front := &g.Balls[0]
 	v := g.Speed
 	if g.State == StateLost {
 		v = suckSpeed
 	} else if g.State != StatePlaying {
 		v = 0
 	}
-	front.S += v * dt
-	if front.S > holeS {
-		front.S = holeS
-	}
+
+	// Find the first gap in the chain.
+	gap := -1
 	for i := 1; i < len(g.Balls); i++ {
-		ahead := g.Balls[i-1]
-		cur := &g.Balls[i]
-		connected := ahead.S-cur.S <= Diam*1.02
-		speed := v
-		if !connected && g.State == StatePlaying {
-			speed = g.Speed * 3
+		if g.Balls[i-1].S-g.Balls[i].S > Diam*1.02 {
+			gap = i
+			break
 		}
-		cur.S += speed * dt
-		if lim := ahead.S - Diam; cur.S > lim {
-			cur.S = lim
+	}
+
+	switch {
+	case gap < 0 || g.State == StateLost:
+		// One connected chain: everything rolls forward together.
+		g.Balls[0].S += v * dt
+		if g.Balls[0].S > holeS {
+			g.Balls[0].S = holeS
 		}
-		if cur.S < 0 {
-			cur.S = 0
+		for i := 1; i < len(g.Balls); i++ {
+			ahead := g.Balls[i-1]
+			cur := &g.Balls[i]
+			cur.S += v * dt
+			if lim := ahead.S - Diam; cur.S > lim {
+				cur.S = lim
+			}
+			if cur.S < 0 {
+				cur.S = 0
+			}
+		}
+	case g.pendingAhead >= 0 && g.State == StatePlaying:
+		// A popped run split the chain: the front section rolls back to meet
+		// the rear one (Zuma's pull-back), the rear waits instead of rushing.
+		room := g.Balls[gap-1].S - g.Balls[gap].S - Diam
+		step := v * 3 * dt
+		if room < 0 {
+			room = 0
+		}
+		if step > room {
+			step = room
+		}
+		for i := 0; i < gap; i++ {
+			g.Balls[i].S -= step
+		}
+	default:
+		// A gap at the tail (a freshly spawned bead): let the rear catch up.
+		for i := gap; i < len(g.Balls); i++ {
+			ahead := g.Balls[i-1]
+			cur := &g.Balls[i]
+			cur.S += v * 3 * dt
+			if lim := ahead.S - Diam; cur.S > lim {
+				cur.S = lim
+			}
+			if cur.S < 0 {
+				cur.S = 0
+			}
 		}
 	}
 
