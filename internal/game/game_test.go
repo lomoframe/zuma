@@ -237,8 +237,7 @@ func TestComboKnockbackIsAnimated(t *testing.T) {
 		{S: 4.752, Color: 0, ID: 3},
 		{S: 4.628, Color: 1, ID: 4},
 	}
-	g.Combo = 1
-	g.comboT = 1 // a second match inside the window: combo becomes 2
+	g.Combo = 1 // first pop of this shot
 	g.matchAt(0)
 	if g.KnockVel >= 0 {
 		t.Fatalf("combo did not add a backwards impulse: %v", g.KnockVel)
@@ -288,8 +287,7 @@ func TestMidChainComboKnockFiresAfterCollision(t *testing.T) {
 	for i, c := range colors {
 		g.Balls = append(g.Balls, Ball{S: 9.0 - float32(i)*Diam, Color: c, ID: i + 1})
 	}
-	g.Combo = 1
-	g.comboT = 1
+	g.Combo = 1 // first pop of this shot
 	g.matchAt(3)
 	if g.pendingKnock == 0 {
 		t.Fatalf("mid-chain combo did not queue a knock")
@@ -307,5 +305,63 @@ func TestMidChainComboKnockFiresAfterCollision(t *testing.T) {
 	}
 	if !fired {
 		t.Fatalf("knock never fired: pending=%v pendingAhead=%d", g.pendingKnock, g.pendingAhead)
+	}
+}
+
+func TestComboKnockGrowsWithEveryPop(t *testing.T) {
+	if comboImpulse(0) != 0 || comboImpulse(1) != 0 {
+		t.Fatalf("knockback must start at the second pop, got %v / %v", comboImpulse(0), comboImpulse(1))
+	}
+	prev := comboImpulse(1)
+	for c := 2; c <= 12; c++ {
+		v := comboImpulse(c)
+		if v <= prev {
+			t.Fatalf("x%d impulse %.3f is not stronger than the previous level %.3f", c, v, prev)
+		}
+		if v >= knockMax {
+			t.Fatalf("x%d impulse %.3f reached the ceiling, levels no longer differ", c, v)
+		}
+		prev = v
+	}
+}
+
+func TestComboCountsPopsOfOneShotOnly(t *testing.T) {
+	g := New(1)
+	g.Queue = nil
+	g.Shots = nil
+	g.Combo = 3
+	if !g.Fire(mgl32.Vec3{0, 1, 0}, mgl32.Vec3{0, 0, -1}) {
+		t.Fatal("fire refused")
+	}
+	if g.Combo != 0 {
+		t.Fatalf("a new shot must start a fresh combo count, got %d", g.Combo)
+	}
+
+	g.Balls = []Ball{
+		{S: 5.000, Color: 0, ID: 11},
+		{S: 4.876, Color: 0, ID: 12},
+		{S: 4.752, Color: 0, ID: 13},
+	}
+	g.matchAt(0) // first pop of this shot
+	if g.Combo != 1 {
+		t.Fatalf("first pop should be x1, got %d", g.Combo)
+	}
+
+	g.Balls = []Ball{
+		{S: 5.000, Color: 1, ID: 21},
+		{S: 4.876, Color: 1, ID: 22},
+		{S: 4.752, Color: 1, ID: 23},
+	}
+	g.matchAt(0) // second pop from the same shot: a real combo
+	if g.Combo != 2 {
+		t.Fatalf("second pop of the same shot should be x2, got %d", g.Combo)
+	}
+	if g.KnockVel >= 0 {
+		t.Fatalf("x2 should fire a knockback, got %v", g.KnockVel)
+	}
+
+	g.Fire(mgl32.Vec3{0, 1, 0}, mgl32.Vec3{0, 0, -1})
+	if g.Combo != 0 {
+		t.Fatalf("next shot must reset the combo, got %d", g.Combo)
 	}
 }

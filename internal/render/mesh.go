@@ -181,3 +181,67 @@ func (b *Builder) flatQuad(p0, p1, p2, p3 mgl32.Vec3, col mgl32.Vec4) {
 	e := b.vertex(p3, n, col)
 	b.quad(a, c, d, e)
 }
+
+// prism extrudes a closed outline between two heights.
+func (b *Builder) prism(outline []mgl32.Vec2, y0, y1 float32, top, side mgl32.Vec4) {
+	n := len(outline)
+	if n < 3 {
+		return
+	}
+	var cx, cz float32
+	for _, p := range outline {
+		cx += p.X()
+		cz += p.Y()
+	}
+	cx /= float32(n)
+	cz /= float32(n)
+	ct := b.vertex(mgl32.Vec3{cx, y1, cz}, mgl32.Vec3{0, 1, 0}, top)
+	cb := b.vertex(mgl32.Vec3{cx, y0, cz}, mgl32.Vec3{0, -1, 0}, top)
+	for i := 0; i < n; i++ {
+		p0, p1 := outline[i], outline[(i+1)%n]
+		v0 := b.vertex(mgl32.Vec3{p0.X(), y1, p0.Y()}, mgl32.Vec3{0, 1, 0}, top)
+		v1 := b.vertex(mgl32.Vec3{p1.X(), y1, p1.Y()}, mgl32.Vec3{0, 1, 0}, top)
+		b.tri(ct, v0, v1)
+		w0 := b.vertex(mgl32.Vec3{p0.X(), y0, p0.Y()}, mgl32.Vec3{0, -1, 0}, top)
+		w1 := b.vertex(mgl32.Vec3{p1.X(), y0, p1.Y()}, mgl32.Vec3{0, -1, 0}, top)
+		b.tri(cb, w1, w0)
+		d := p1.Sub(p0)
+		nrm := mgl32.Vec3{d.Y(), 0, -d.X()}
+		if l := nrm.Len(); l > 0 {
+			nrm = nrm.Mul(1 / l)
+		}
+		s0 := b.vertex(mgl32.Vec3{p0.X(), y0, p0.Y()}, nrm, side)
+		s1 := b.vertex(mgl32.Vec3{p1.X(), y0, p1.Y()}, nrm, side)
+		s2 := b.vertex(mgl32.Vec3{p1.X(), y1, p1.Y()}, nrm, side)
+		s3 := b.vertex(mgl32.Vec3{p0.X(), y1, p0.Y()}, nrm, side)
+		b.quad(s0, s1, s2, s3)
+	}
+}
+
+// face fills a closed outline at one height, visible from both sides.
+func (b *Builder) face(outline []mgl32.Vec2, y float32, col mgl32.Vec4) {
+	n := len(outline)
+	if n < 3 {
+		return
+	}
+	var cx, cz float32
+	for _, p := range outline {
+		cx += p.X()
+		cz += p.Y()
+	}
+	cx /= float32(n)
+	cz /= float32(n)
+	for _, up := range []float32{1, -1} {
+		c := b.vertex(mgl32.Vec3{cx, y, cz}, mgl32.Vec3{0, up, 0}, col)
+		for i := 0; i < n; i++ {
+			p0, p1 := outline[i], outline[(i+1)%n]
+			v0 := b.vertex(mgl32.Vec3{p0.X(), y, p0.Y()}, mgl32.Vec3{0, up, 0}, col)
+			v1 := b.vertex(mgl32.Vec3{p1.X(), y, p1.Y()}, mgl32.Vec3{0, up, 0}, col)
+			if up > 0 {
+				b.tri(c, v0, v1)
+			} else {
+				b.tri(c, v1, v0)
+			}
+		}
+	}
+}

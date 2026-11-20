@@ -45,7 +45,7 @@ func TestBuilderWinding(t *testing.T) {
 }
 
 func TestBoardAndFrogBuild(t *testing.T) {
-	board := buildBoard(game.NewPathForBoard())
+	board := buildBoard(game.CircleBoard(3.10), game.NewPathForBoard())
 	if len(board.idx) < 3000 {
 		t.Fatalf("board mesh looks empty: %d indices", len(board.idx))
 	}

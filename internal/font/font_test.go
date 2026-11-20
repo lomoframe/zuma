@@ -8,6 +8,7 @@ func TestEmbeddedFontRenders(t *testing.T) {
 	for _, text := range []string{
 		"分数 1240   第 3 关", "左键 / 扳机 发射", "连击 x3   剩余 20",
 		"游戏结束", "第 2 关 通过!", "按 R 或扳机 重新开始", "得分 900   最高 3200",
+		"祖玛 VR", "球链神庙", "加载中 42%", "github.com/lomoalbert", "空格 / 扳机 跳过",
 	} {
 		line, err := Render(Embedded(), text, 24)
 		if err != nil {

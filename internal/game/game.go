@@ -120,7 +120,8 @@ func SpecFor(level int) LevelSpec {
 
 // Game is the whole round state.
 type Game struct {
-	Path *Path
+	Path  *Path
+	Board Board
 
 	Balls []Ball
 	Shots []Shot
@@ -132,7 +133,6 @@ type Game struct {
 	Score     int
 	Best      int
 	Combo     int
-	comboT    float32
 	LevelSpec LevelSpec
 
 	Loaded int
@@ -184,7 +184,7 @@ func New(seed int64) *Game {
 // come in.
 func (g *Game) startLevel() {
 	spec := SpecFor(g.Level)
-	g.Path = NewPathForLevel(g.Level, g.Rng)
+	g.Board, g.Path = NewLayoutForLevel(g.Level, g.Rng)
 	g.LevelSpec = spec
 	g.Speed = spec.Speed
 	g.State = StatePlaying
@@ -192,7 +192,6 @@ func (g *Game) startLevel() {
 	g.Popups = nil
 	g.Balls = nil
 	g.Combo = 0
-	g.comboT = 0
 	g.pendingAhead = -1
 	g.stateT = 0
 	g.loseT = 0
@@ -224,8 +223,8 @@ func (g *Game) startLevel() {
 	for i := range g.Queue {
 		g.Queue[i] = g.randColor(spec.Colors)
 	}
-	g.Loaded = g.randColor(spec.Colors)
-	g.Next = g.randColor(spec.Colors)
+	g.Loaded = g.pickColor(spec.Colors)
+	g.Next = g.pickColor(spec.Colors)
 }
 
 func (g *Game) randColor(n int) int {
@@ -233,6 +232,60 @@ func (g *Game) randColor(n int) int {
 		n = 1
 	}
 	return g.Rng.Intn(n)
+}
+
+// colourOnBoard reports whether a colour still has beads that can be matched:
+// either on the chain or in flight.
+func (g *Game) colourOnBoard(c, n int) bool {
+	if c < 0 || c >= n {
+		return false
+	}
+	for _, b := range g.Balls {
+		if b.Color == c {
+			return true
+		}
+	}
+	for _, sh := range g.Shots {
+		if sh.Color == c {
+			return true
+		}
+	}
+	return false
+}
+
+// pickColor chooses the colour of the bead the launcher hands the player. A
+// colour that has been cleared from the board is never offered: it could not
+// match anything and would only waste a shot. Every colour still on the chain
+// (or in the air) is equally likely.
+//
+// Only the player's beads are filtered. The chain refills with randColor over
+// all colours, so a cleared colour comes back onto the board - and back into
+// the hand - as soon as it spawns again.
+func (g *Game) pickColor(n int) int {
+	if n < 1 {
+		n = 1
+	}
+	live := 0
+	for c := 0; c < n; c++ {
+		if g.colourOnBoard(c, n) {
+			live++
+		}
+	}
+	if live == 0 {
+		// Nothing to match yet: an empty board still needs a bead.
+		return g.randColor(n)
+	}
+	pick := g.Rng.Intn(live)
+	for c := 0; c < n; c++ {
+		if !g.colourOnBoard(c, n) {
+			continue
+		}
+		if pick == 0 {
+			return c
+		}
+		pick--
+	}
+	return g.randColor(n)
 }
 
 // Restart goes back to level 1 and clears the score.
@@ -264,10 +317,14 @@ func (g *Game) Fire(origin, dir mgl32.Vec3) bool {
 	}
 	dir = dir.Normalize()
 	start := origin.Add(dir.Mul(0.06))
+	g.Combo = 0 // a new bead starts its own combo count
 	g.Shots = append(g.Shots, Shot{Pos: start, Vel: dir.Mul(shotSpeed), Color: g.Loaded})
 	g.Events = append(g.Events, Event{Kind: EventShoot})
 	g.Loaded = g.Next
-	g.Next = g.randColor(g.LevelSpec.Colors)
+	if !g.colourOnBoard(g.Loaded, g.LevelSpec.Colors) {
+		g.Loaded = g.pickColor(g.LevelSpec.Colors)
+	}
+	g.Next = g.pickColor(g.LevelSpec.Colors)
 	return true
 }
 
@@ -337,12 +394,6 @@ func (g *Game) Update(dt float32) {
 	if dt > 0.1 {
 		dt = 0.1
 	}
-	if g.comboT > 0 {
-		g.comboT -= dt
-		if g.comboT <= 0 {
-			g.Combo = 0
-		}
-	}
 	if g.Flash > 0 {
 		g.Flash -= dt * 2.2
 	}
@@ -389,6 +440,11 @@ func (g *Game) Update(dt float32) {
 		g.spawn()
 	}
 	g.stepChain(dt)
+	// A bead in hand must stay usable: if its colour has just been cleared
+	// from the board, swap it for one that still has beads to match.
+	if g.State == StatePlaying && !g.colourOnBoard(g.Loaded, g.LevelSpec.Colors) {
+		g.Loaded = g.pickColor(g.LevelSpec.Colors)
+	}
 
 	if g.State == StatePlaying && len(g.Balls) > 0 {
 		if g.Balls[0].S >= g.Path.Len-holesInset {
@@ -528,10 +584,7 @@ func (g *Game) stepChain(dt float32) {
 				g.pendingAhead = -1
 				// The two halves have collided: now the combo knockback lands.
 				if g.pendingKnock > 0 {
-					g.KnockVel -= g.pendingKnock
-					if g.KnockVel < -6 {
-						g.KnockVel = -6
-					}
+					g.KnockVel = clampKnock(g.KnockVel - g.pendingKnock)
 					g.pendingKnock = 0
 				}
 				g.matchAt(idx)
@@ -682,12 +735,7 @@ func (g *Game) matchAt(idx int) {
 	if n < 3 {
 		return
 	}
-	if g.comboT > 0 {
-		g.Combo++
-	} else {
-		g.Combo = 1
-	}
-	g.comboT = 4.5
+	g.Combo++
 	mult := g.Combo
 	if mult > 9 {
 		mult = 9
@@ -717,16 +765,11 @@ func (g *Game) matchAt(idx int) {
 	g.Balls = g.Balls[:len(g.Balls)-(hi-lo+1)]
 	// The combo impulse is held until the front and rear halves meet again;
 	// if the pop touched an end of the chain there is no collision to wait for.
-	if g.Combo >= 2 {
-		c := float32(g.Combo)
-		impulse := 0.8*c + 0.35*c*c // heavier with every combo step
+	if impulse := comboImpulse(g.Combo); impulse > 0 {
 		if lo > 0 && lo < len(g.Balls) {
 			g.pendingKnock += impulse
 		} else {
-			g.KnockVel -= impulse
-			if g.KnockVel < -6 {
-				g.KnockVel = -6
-			}
+			g.KnockVel = clampKnock(g.KnockVel - impulse)
 		}
 	}
 	if lo > 0 && lo < len(g.Balls) && aheadID >= 0 {
@@ -735,6 +778,30 @@ func (g *Game) matchAt(idx int) {
 		g.pendingAhead = -1
 	}
 	g.pushFrom, g.push = -1, 0
+}
+
+// knockMax bounds the chain recoil. The impulse grows with every extra pop, so
+// it needs a ceiling that keeps the beads inside the groove.
+const knockMax float32 = 9
+
+// comboImpulse is the recoil (m/s, away from the hole) for c pops caused by one
+// shot: nothing on the first pop, then a strictly stronger push for every level.
+// The tanh keeps that growth visible at each step without letting a long combo
+// fire the chain off the board.
+func comboImpulse(c int) float32 {
+	if c < 2 {
+		return 0
+	}
+	raw := 0.8*float32(c) + 0.35*float32(c)*float32(c)
+	return knockMax * float32(math.Tanh(float64(raw/knockMax)))
+}
+
+// clampKnock keeps a recoil velocity inside the range the chain can absorb.
+func clampKnock(v float32) float32 {
+	if v < -knockMax {
+		return -knockMax
+	}
+	return v
 }
 
 func itoa(v int) string {

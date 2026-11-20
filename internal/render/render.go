@@ -228,6 +228,7 @@ type Renderer struct {
 	board    *Mesh
 	table    *Mesh
 	path     *game.Path
+	pathKey  string
 	frog     *Mesh
 	ball     *Mesh
 	ring     *Mesh
@@ -236,6 +237,15 @@ type Renderer struct {
 	hand     *Mesh
 	handName string
 	quad     *textQuad
+
+	// Loading screen.
+	splashProg             gl.Program
+	uSplashMVP, uSplashTex int32
+	uSplashTint            int32
+	splashBG               uint32
+	splashBGQuad           *textQuad
+	splashBar              *Mesh
+	splash                 *splashState
 
 	texts map[string]*textTex
 }
@@ -295,13 +305,15 @@ func (r *Renderer) DrawStatic(vp, world mgl32.Mat4) {
 
 // SetPath rebuilds the board geometry when a level's spiral changes. The old
 // mesh is left to the driver; a session only builds a handful of boards.
-func (r *Renderer) SetPath(p *game.Path) {
-	if r.path != nil && r.path.Start == p.Start && r.path.Turns == p.Turns &&
-		r.path.RInner == p.RInner && r.path.ROuter == p.ROuter {
+func (r *Renderer) SetPath(bd game.Board, p *game.Path) {
+	key := p.Key + "|" + fmt.Sprintf("%.2f/%.2f/%.2f", bd.W, bd.H, bd.Corner)
+	if r.path != nil && r.pathKey == key {
 		return
 	}
-	r.board = upload(buildBoard(p))
+	r.board = upload(buildBoard(bd, p))
+	r.table = upload(buildTable(bd))
 	r.path = p
+	r.pathKey = key
 }
 
 // New compiles the shaders and uploads the static geometry.
@@ -330,14 +342,16 @@ func New() (*Renderer, error) {
 		uColor:   tp.Loc("uColor"),
 		texts:    map[string]*textTex{},
 	}
-	r.SetPath(game.NewPathForBoard())
-	r.table = upload(buildTable())
+	r.SetPath(game.CircleBoard(3.10), game.NewPathForBoard())
 	r.frog = upload(buildFrog())
 	r.ball = upload(buildBall())
 	r.ring = upload(buildRing())
 	r.beam = upload(buildBeam())
 	r.seam = upload(buildSeam())
 	r.quad = newTextQuad()
+	if err := r.newSplashGeometry(); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -391,19 +405,28 @@ func buildRing() *Builder {
 
 // buildTable is the table the playfield sits on. It is drawn upright even when
 // the playfield itself is tilted.
-func buildTable() *Builder {
+func tableRadius(bd game.Board) float32 {
+	r := bd.HalfW()
+	if bd.HalfH() > r {
+		r = bd.HalfH()
+	}
+	return r + 0.55 // the felt edge plus the wooden rim, with a margin
+}
+
+func buildTable(bd game.Board) *Builder {
 	b := &Builder{}
-	const seg = 96
+	const seg = 120
 	table := rgba(0.115, 0.080, 0.062, 1)
-	b.disc(0, 0, 2.30, -0.135, rgba(0.05, 0.035, 0.028, 1), seg, false)
-	b.cylinder(0, 0, 2.30, -0.135, -0.10, table, seg)
-	b.disc(0, 0, 2.30, -0.10, table, seg, true)
+	r := tableRadius(bd)
+	b.disc(0, 0, r, -0.135, rgba(0.05, 0.035, 0.028, 1), seg, false)
+	b.cylinder(0, 0, r, -0.135, -0.10, table, seg)
+	b.disc(0, 0, r, -0.10, table, seg, true)
 	return b
 }
 
 // buildBoard lays out the playfield: wooden disc, felt, the spiral groove, the
 // entry mouth, the hole and the score plaque.
-func buildBoard(path *game.Path) *Builder {
+func buildBoard(bd game.Board, path *game.Path) *Builder {
 	b := &Builder{}
 	wood := rgba(0.22, 0.14, 0.10, 1)
 	woodDark := rgba(0.10, 0.065, 0.05, 1)
@@ -411,15 +434,20 @@ func buildBoard(path *game.Path) *Builder {
 	feltHi := rgba(0.14, 0.36, 0.36, 1)
 	copper := rgba(0.66, 0.43, 0.17, 1)
 	stone := rgba(0.22, 0.23, 0.26, 1)
-	panel := rgba(0.055, 0.075, 0.095, 1)
 
-	const seg = 96
-	b.disc(0, 0, game.BoardRadius, -0.10, woodDark, seg, false)
-	b.cylinder(0, 0, game.BoardRadius, -0.10, 0.0, wood, seg)
-	b.disc(0, 0, game.BoardRadius-0.015, 0.0, wood, seg, true)
-	b.disc(0, 0, game.BoardRadius-0.11, 0.006, felt, seg, true)
-	b.torus(0, 0, game.BoardRadius-0.085, 0.018, 0.006, feltHi, seg, 8)
-	b.torus(0, 0, game.BoardRadius-0.05, 0.022, 0.012, copper, seg, 10)
+	// The felt takes the board's own silhouette, so oval / rounded-rectangle /
+	// strip boards are extruded from their outline instead of being discs.
+	outer := bd.Inflate(0.17)
+	b.prism(outer.Outline(140), -0.10, 0.0, woodDark, wood)
+	b.face(bd.Outline(140), 0.005, felt)
+	closeLoop := func(pts []mgl32.Vec2) []mgl32.Vec2 {
+		if len(pts) > 0 {
+			pts = append(pts, pts[0])
+		}
+		return pts
+	}
+	b.ribbon(game.NewPath(closeLoop(bd.Inflate(0.01).Outline(180))), 0.05, 0.013, feltHi)
+	b.ribbon(game.NewPath(closeLoop(bd.Inflate(0.115).Outline(180))), 0.035, 0.020, copper)
 
 	// The groove: a channel just wide enough for the beads, with two lit lips.
 	b.ribbon(path, game.Diam*1.30, 0.0120, rgba(0.030, 0.075, 0.078, 1))
@@ -432,28 +460,13 @@ func buildBoard(path *game.Path) *Builder {
 	b.disc(pos.X(), pos.Y(), 0.095, 0.016, rgba(0, 0, 0, 1), 24, true)
 	b.torus(pos.X(), pos.Y(), 0.108, 0.032, 0.030, stone, 24, 8)
 
-	// Hole at the end of the path: a pit with a stone lip and two red eyes.
+	// Hole at the end of the path.
 	end, _ := path.At(path.Len)
 	b.disc(end.X(), end.Y(), 0.155, 0.014, rgba(0.004, 0.005, 0.007, 1), 40, true)
 	b.torus(end.X(), end.Y(), 0.168, 0.038, 0.030, stone, 40, 10)
 	b.sphere(mgl32.Vec3{end.X() - 0.058, 0.064, end.Y() - 0.120}, 0.021, rgba(1.0, 0.14, 0.09, 1), 12, 8)
 	b.sphere(mgl32.Vec3{end.X() + 0.058, 0.064, end.Y() - 0.120}, 0.021, rgba(1.0, 0.14, 0.09, 1), 12, 8)
 
-	// Score plaque on two legs behind the board, facing the player.
-	const pz = -1.90
-	post := rgba(0.30, 0.20, 0.12, 1)
-	b.cylinder(-0.62, pz, 0.030, -0.10, 0.34, post, 12)
-	b.cylinder(0.62, pz, 0.030, -0.10, 0.34, post, 12)
-	b.flatQuad(mgl32.Vec3{-0.80, 0.30, pz}, mgl32.Vec3{0.80, 0.30, pz},
-		mgl32.Vec3{0.80, 0.86, pz}, mgl32.Vec3{-0.80, 0.86, pz}, panel)
-	b.flatQuad(mgl32.Vec3{-0.80, 0.86, pz}, mgl32.Vec3{0.80, 0.86, pz},
-		mgl32.Vec3{0.80, 0.884, pz}, mgl32.Vec3{-0.80, 0.884, pz}, copper)
-	b.flatQuad(mgl32.Vec3{-0.80, 0.276, pz}, mgl32.Vec3{0.80, 0.276, pz},
-		mgl32.Vec3{0.80, 0.30, pz}, mgl32.Vec3{-0.80, 0.30, pz}, copper)
-	b.flatQuad(mgl32.Vec3{-0.826, 0.276, pz}, mgl32.Vec3{-0.80, 0.276, pz},
-		mgl32.Vec3{-0.80, 0.884, pz}, mgl32.Vec3{-0.826, 0.884, pz}, copper)
-	b.flatQuad(mgl32.Vec3{0.80, 0.276, pz}, mgl32.Vec3{0.826, 0.276, pz},
-		mgl32.Vec3{0.826, 0.884, pz}, mgl32.Vec3{0.80, 0.884, pz}, copper)
 	return b
 }
 
@@ -806,7 +819,7 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now fl
 	if f := g.Flash; f > 0 {
 		scoreCol = rgba(1, 1-0.15*f, 1-0.55*f, 0.97)
 	}
-	r.drawText(vp, base, -0.74, 0.845, 46, fmt.Sprintf("分数 %d   第 %d 关", g.Score, g.Level), false, scoreCol)
+	r.drawText(vp, base, -0.74, 0.845, 46, fmt.Sprintf("分数 %d   第 %d 关", g.Score, g.Level), alignLeft, scoreCol)
 	line2 := ""
 	switch {
 	case g.State == game.StateLost && g.LoseReady():
@@ -814,7 +827,7 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now fl
 	case g.State == game.StatePlaying && g.Score == 0:
 		line2 = "左键 / 扳机 发射"
 	case g.Combo > 1:
-		line2 = fmt.Sprintf("连击 x%d   剩余 %d", g.Combo, len(g.Queue)+len(g.Balls))
+		line2 = fmt.Sprintf("本发连击 x%d   剩余 %d", g.Combo, len(g.Queue)+len(g.Balls))
 	default:
 		line2 = fmt.Sprintf("剩余 %d", len(g.Queue)+len(g.Balls))
 	}
@@ -822,25 +835,34 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now fl
 	if g.State == game.StateLost && g.LoseReady() {
 		col2 = rgba(1.0, 0.72, 0.55, 0.95)
 	}
-	r.drawText(vp, base, -0.74, 0.585, 38, line2, false, col2)
+	r.drawText(vp, base, -0.74, 0.585, 38, line2, alignLeft, col2)
 
 	overlay := world.Mul4(mgl32.Translate3D(0, 0, 0.92))
 	switch g.State {
 	case game.StateWon:
-		r.drawText(vp, overlay, 0, 1.06, 64, fmt.Sprintf("第 %d 关 通过!", g.Level), true, rgba(1.0, 0.93, 0.55, 1))
-		r.drawText(vp, overlay, 0, 0.74, 44, fmt.Sprintf("得分 %d", g.Score), true, rgba(1, 1, 1, 0.96))
+		r.drawText(vp, overlay, 0, 1.06, 64, fmt.Sprintf("第 %d 关 通过!", g.Level), alignCenter, rgba(1.0, 0.93, 0.55, 1))
+		r.drawText(vp, overlay, 0, 0.74, 44, fmt.Sprintf("得分 %d", g.Score), alignCenter, rgba(1, 1, 1, 0.96))
 	case game.StateLost:
 		if g.LoseReady() {
 			pulse := 0.80 + 0.20*float32(math.Sin(now*4))
-			r.drawText(vp, overlay, 0, 1.06, 64, "游戏结束", true, rgba(1.0, 0.28, 0.20, pulse))
-			r.drawText(vp, overlay, 0, 0.74, 44, fmt.Sprintf("得分 %d   最高 %d", g.Score, g.Best), true, rgba(1, 1, 1, 0.96))
+			r.drawText(vp, overlay, 0, 1.06, 64, "游戏结束", alignCenter, rgba(1.0, 0.28, 0.20, pulse))
+			r.drawText(vp, overlay, 0, 0.74, 44, fmt.Sprintf("得分 %d   最高 %d", g.Score, g.Best), alignCenter, rgba(1, 1, 1, 0.96))
 		}
 	}
 }
 
-// drawText draws one line whose top-left corner sits at (x,y) in the plane of
-// base. A centred line is shifted by half its width.
-func (r *Renderer) drawText(vp, base mgl32.Mat4, x, y float32, px int, text string, center bool, col mgl32.Vec4) {
+// alignMode selects where (x,y) sits on a text line.
+type alignMode int
+
+const (
+	alignLeft alignMode = iota
+	alignCenter
+	alignRight
+)
+
+// drawText draws one line whose top edge starts at y in the plane of base; x is
+// the left edge, the centre or the right edge depending on align.
+func (r *Renderer) drawText(vp, base mgl32.Mat4, x, y float32, px int, text string, align alignMode, col mgl32.Vec4) {
 	if text == "" {
 		return
 	}
@@ -874,8 +896,11 @@ func (r *Renderer) drawText(vp, base mgl32.Mat4, x, y float32, px int, text stri
 	const units = 0.0032
 	w := float32(line.w) * units
 	h := float32(line.h) * units
-	if center {
+	switch align {
+	case alignCenter:
 		x -= w / 2
+	case alignRight:
+		x -= w
 	}
 
 	corner := func(dx, dy float32) [4]mgl32.Vec3 {

@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"runtime"
+	"time"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
@@ -82,7 +83,7 @@ const (
 	vrBoardScale = 0.55
 	// The playfield leans toward the player: the near edge stays on the table
 	// and the far edge rises, like a pinball table.
-	boardTiltDeg = 30
+	boardTiltDeg = 20
 	boardHingeZ  = 1.55
 )
 
@@ -93,7 +94,7 @@ func main() {
 	useVR := flag.Bool("vr", true, "render in SteamVR when a headset is present")
 	shot := flag.String("screenshot", "", "write a PNG before exiting (desktop view)")
 	frames := flag.Int("frames", 40, "frames to render before the screenshot")
-	seed := flag.Int64("seed", 7, "random seed")
+	seed := flag.Int64("seed", 0, "random seed (0 = time-based)")
 	msaa := flag.Int("msaa", 4, "MSAA samples for the VR eye textures")
 	vrDebug := flag.Bool("vr-debug", false, "log head/controller/aim once per second")
 	ctrlModel := flag.Bool("controller-model", false, "draw SteamVR's controller mesh (may crash the zink driver on the frame)")
@@ -101,11 +102,18 @@ func main() {
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
 	demo := flag.String("demo", "", "screenshot helper: \"won\" or \"lost\" shows the overlay")
+	splash := flag.Float64("splash", 3.4, "loading animation seconds before the level starts (0 = off)")
 	yaw := flag.Float64("yaw", 0, "desktop camera yaw in radians")
 	pitch := flag.Float64("pitch", 0.60, "desktop camera pitch in radians")
 	dist := flag.Float64("dist", 6.2, "desktop camera distance in metres")
 	flag.Bool("hud-debug", false, "print text quad sizes")
 	flag.Parse()
+	splashSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "splash" {
+			splashSet = true
+		}
+	})
 	render.SetTextDebug(flag.Lookup("hud-debug").Value.String() == "true")
 
 	runtime.LockOSThread()
@@ -143,11 +151,23 @@ func main() {
 		defer audio.Close()
 	}
 
+	if *seed == 0 {
+		*seed = time.Now().UnixNano()
+	}
 	a := &app{
 		g:   game.New(*seed),
 		r:   renderer,
 		cam: camera{yaw: *yaw, pitch: *pitch, dist: *dist},
 	}
+	if *shot != "" && !splashSet {
+		*splash = 0 // reference screenshots show the level, not the loading art
+	}
+	splashStart := glfw.GetTime()
+	if *shot != "" {
+		splashStart = 0 // screenshots run on the fixed frame clock
+	}
+	renderer.StartSplash(splashStart, *splash)
+
 	a.tableWorld = mgl32.Translate3D(0, vrBoardY, vrBoardZ).Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
 	tilt := mgl32.Translate3D(0, 0, boardHingeZ).
 		Mul4(mgl32.HomogRotate3DX(mgl32.DegToRad(boardTiltDeg))).
@@ -155,6 +175,18 @@ func main() {
 	a.tilt = tilt
 	a.board = a.tableWorld.Mul4(tilt)
 	a.boardInv = a.board.Inv()
+
+	// Paint the loading cover before SteamVR comes up: vr.Init blocks for a
+	// second or two, and an empty window looks like a crash.
+	if *splash > 0 {
+		gl.BindFramebuffer(0)
+		w, h := win.GetFramebufferSize()
+		gl.Viewport(0, 0, int32(w), int32(h))
+		clearScene()
+		renderer.DrawSplash(mgl32.Ident4(), render.SplashFit(w, h), splashStart+1.0)
+		win.SwapBuffers()
+		log.Printf("loading screen: %.1f s", *splash)
+	}
 
 	a.vrDebug = *vrDebug
 	a.msaa = int32(*msaa)
@@ -173,6 +205,10 @@ func main() {
 
 	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, _ glfw.ModifierKey) {
 		if button == glfw.MouseButton1 && action == glfw.Press {
+			if a.r.SplashActive(glfw.GetTime()) {
+				a.r.EndSplash()
+				return
+			}
 			a.fire()
 		}
 	})
@@ -189,6 +225,10 @@ func main() {
 			a.playEvents()
 			log.Printf("restarted")
 		case glfw.KeySpace:
+			if a.r.SplashActive(glfw.GetTime()) {
+				a.r.EndSplash()
+				return
+			}
 			a.fire()
 		}
 	})
@@ -243,9 +283,11 @@ func main() {
 		if *shot != "" && *fire && frame == 8 {
 			a.fire()
 		}
-		a.g.Update(float32(dt))
-		a.r.SetPath(a.g.Path)
-		a.playEvents()
+		if !a.r.SplashActive(now) {
+			a.g.Update(float32(dt))
+			a.r.SetPath(a.g.Board, a.g.Path)
+			a.playEvents()
+		}
 
 		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
 			m, state := vr.LoadRenderModel(a.lastDev)
@@ -373,6 +415,10 @@ func (a *app) renderDesktop(now float64) {
 	w, h := currentWindow.GetFramebufferSize()
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
+	if a.r.SplashActive(now) {
+		a.r.DrawSplash(mgl32.Ident4(), render.SplashFit(w, h), now)
+		return
+	}
 	a.r.DrawStatic(vp, mgl32.Ident4())
 	a.r.Draw(vp, eye, a.tilt, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
@@ -390,6 +436,10 @@ func (a *app) renderMirror(now float64) {
 	gl.BindFramebuffer(0)
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
+	if a.r.SplashActive(now) {
+		a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(head), now)
+		return
+	}
 	a.r.DrawStatic(proj.Mul4(view), a.tableWorld)
 	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
@@ -411,7 +461,11 @@ func (a *app) renderEyes(now float64) {
 		rt.Bind()
 		gl.Viewport(0, 0, rt.W, rt.H)
 		clearScene()
-		a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+		if a.r.SplashActive(now) {
+			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(head), now)
+		} else {
+			a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+		}
 		rt.Resolve()
 		gl.Flush()
 		rt.Unbind()
