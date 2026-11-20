@@ -58,18 +58,25 @@ uniform vec3 uCam;
 uniform float uGloss;
 uniform float uUnlit;
 out vec4 frag;
+
+float hash13(vec3 p) {
+        p = fract(p * 0.3183099 + vec3(0.11, 0.17, 0.23));
+        p *= 17.0;
+        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
 void main() {
         vec3 n = normalize(vNrm);
         vec3 L = normalize(vec3(0.38, 0.88, 0.30));
         vec3 base = vCol.rgb * uTint.rgb;
         if (uBall > 0.5) {
-                // Two dark meridians plus a faint speckle; rotating them is the
-                // rolling cue.
+                // Fine speckle noise only: no stripes. It rotates with the
+                // ball's real rolling, so the grain visibly flows.
                 vec3 p = uBallRot * vLocal;
-                float lon = atan(p.z, p.x);
-                float seam = abs(fract(lon / 3.14159265 + 0.5) - 0.5);
-                base *= mix(0.58, 1.0, smoothstep(0.05, 0.115, seam));
-                base *= 0.93 + 0.07 * sin(11.0 * p.y + 5.0 * lon);
+                float n1 = hash13(floor(p * 11.0));
+                float n2 = hash13(floor(p * 27.0 + 7.0));
+                float n3 = hash13(floor(p * 53.0 + 19.0));
+                base *= 0.84 + 0.13 * n1 + 0.07 * n2 + 0.04 * n3;
         }
         if (uUnlit > 0.5) {
                 frag = vec4(base, vCol.a * uTint.a);
