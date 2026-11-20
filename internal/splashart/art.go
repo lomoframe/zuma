@@ -24,7 +24,7 @@ const (
 
 	SpiralOuter = 252.0
 	SpiralInner = 64.0
-	Turns       = 2.25
+	Turns       = 1.8
 
 	GrooveHalf  = 27.0 // half width of the dark channel
 	BeadRadius  = 23.0

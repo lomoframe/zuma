@@ -9,7 +9,7 @@ import (
 // channel: it starts at the outer radius, ends at the inner one, and never
 // wanders outside the felt.
 func TestSpiralStaysInsideTheGroove(t *testing.T) {
-	if SpiralLength < 1800 {
+	if SpiralLength < 1500 {
 		t.Fatalf("spiral is too short for a chain: %.0f px", SpiralLength)
 	}
 	firstX, firstY, ok := SpiralAt(0)
