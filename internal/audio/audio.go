@@ -152,6 +152,19 @@ func Play(clip Clip, gain float32) {
 	C.govr_audio_play(buf, C.float(gain), C.float(pitch))
 }
 
+// PlayPitched plays a one-shot at an explicit pitch, used to make combo hits
+// climb with the combo level.
+func PlayPitched(clip Clip, gain, pitch float32) {
+	if !ready || gain <= 0 || clip < 0 || clip >= clipCount {
+		return
+	}
+	buf := buffers[clip]
+	if buf == 0 {
+		return
+	}
+	C.govr_audio_play(buf, C.float(gain), C.float(pitch))
+}
+
 // SetEngineLoop drives the motorcycle engine loop: gain 0 silences it, pitch
 // follows the revs.
 func SetEngineLoop(gain, pitch float32) {

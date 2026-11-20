@@ -6,6 +6,7 @@ package game
 
 import (
 	"math"
+	"math/rand"
 	"sort"
 
 	"github.com/go-gl/mathgl/mgl32"
@@ -17,6 +18,13 @@ type Path struct {
 	pts []mgl32.Vec2
 	cum []float32
 	Len float32
+
+	// Generation parameters, so the renderer can tell when the board geometry
+	// has to be rebuilt for a new level.
+	Start  float32
+	Turns  float32
+	ROuter float32
+	RInner float32
 }
 
 // NewSpiralPath builds the board's single spiral: it starts at the outer rim
@@ -30,7 +38,9 @@ func NewSpiralPath(startAngle, turns, rOuter, rInner float32) *Path {
 		r := rOuter + (rInner-rOuter)*t
 		pts = append(pts, mgl32.Vec2{r * float32(math.Cos(float64(a))), r * float32(math.Sin(float64(a)))})
 	}
-	return NewPath(pts)
+	p := NewPath(pts)
+	p.Start, p.Turns, p.ROuter, p.RInner = startAngle, turns, rOuter, rInner
+	return p
 }
 
 // NewPath measures the cumulative arc length of a polyline.
@@ -103,7 +113,17 @@ const (
 	spiralInner = 0.52
 )
 
-// NewPath builds the level path.
+// NewPathForBoard is the fixed spiral used by tests and as a stand-in before a
+// level exists.
 func NewPathForBoard() *Path {
 	return NewSpiralPath(spiralStart, spiralTurns, spiralOuter, spiralInner)
+}
+
+// NewPathForLevel builds a fresh spiral for a level: roughly twice the old
+// length, with a random rotation and a random inner end so the hole is not
+// always in the same place (and not necessarily central).
+func NewPathForLevel(level int, rng *rand.Rand) *Path {
+	start := rng.Float32() * 2 * math.Pi
+	inner := 0.30 + rng.Float32()*0.20 // 0.30..0.50: keeps the turns apart on the board
+	return NewSpiralPath(start, 3.8, spiralOuter, inner)
 }

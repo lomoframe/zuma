@@ -204,6 +204,7 @@ type Renderer struct {
 	uMVP, uTex, uColor                       int32
 
 	board    *Mesh
+	path     *game.Path
 	frog     *Mesh
 	ball     *Mesh
 	ring     *Mesh
@@ -214,6 +215,17 @@ type Renderer struct {
 	quad     *textQuad
 
 	texts map[string]*textTex
+}
+
+// SetPath rebuilds the board geometry when a level's spiral changes. The old
+// mesh is left to the driver; a session only builds a handful of boards.
+func (r *Renderer) SetPath(p *game.Path) {
+	if r.path != nil && r.path.Start == p.Start && r.path.Turns == p.Turns &&
+		r.path.RInner == p.RInner && r.path.ROuter == p.ROuter {
+		return
+	}
+	r.board = upload(buildBoard(p))
+	r.path = p
 }
 
 // New compiles the shaders and uploads the static geometry.
@@ -240,8 +252,7 @@ func New() (*Renderer, error) {
 		uColor:   tp.Loc("uColor"),
 		texts:    map[string]*textTex{},
 	}
-	path := game.NewPathForBoard()
-	r.board = upload(buildBoard(path))
+	r.SetPath(game.NewPathForBoard())
 	r.frog = upload(buildFrog())
 	r.ball = upload(buildBall())
 	r.ring = upload(buildRing())
@@ -326,10 +337,10 @@ func buildBoard(path *game.Path) *Builder {
 	b.torus(0, 0, game.BoardRadius-0.05, 0.022, 0.012, copper, seg, 10)
 
 	// The groove: a channel just wide enough for the beads, with two lit lips.
-	b.ribbon(path, game.Diam*1.75, 0.0120, rgba(0.030, 0.075, 0.078, 1))
-	b.ribbon(path, game.Diam*1.45, 0.0128, rgba(0.004, 0.010, 0.012, 1))
-	b.ribbonOffset(path, game.Diam*0.34, game.Diam*0.88, 0.0140, rgba(0.20, 0.46, 0.45, 1))
-	b.ribbonOffset(path, game.Diam*0.34, -game.Diam*0.88, 0.0140, rgba(0.20, 0.46, 0.45, 1))
+	b.ribbon(path, game.Diam*1.30, 0.0120, rgba(0.030, 0.075, 0.078, 1))
+	b.ribbon(path, game.Diam*1.10, 0.0128, rgba(0.004, 0.010, 0.012, 1))
+	b.ribbonOffset(path, game.Diam*0.22, game.Diam*0.80, 0.0140, rgba(0.20, 0.46, 0.45, 1))
+	b.ribbonOffset(path, game.Diam*0.22, -game.Diam*0.80, 0.0140, rgba(0.20, 0.46, 0.45, 1))
 
 	// Entry mouth at s=0.
 	pos, _ := path.At(0)
@@ -591,8 +602,8 @@ func (r *Renderer) aimTarget(g *game.Game, o, d mgl32.Vec3) (mgl32.Vec3, seamMar
 		seamS = (s + g.Balls[bestIdx+1].S) * 0.5
 	}
 	p := g.Path.PointAt(seamS)
-	end := mgl32.Vec3{p.X(), game.BallR, p.Y()}
-	return end, seamMark{pos: end, tan: tan}, true
+	seam := mgl32.Vec3{p.X(), game.BallR, p.Y()}
+	return hit, seamMark{pos: seam, tan: tan}, true
 }
 
 // drawSeam draws a bright band across the groove at the insertion gap.
@@ -613,11 +624,8 @@ func (r *Renderer) drawSeam(world mgl32.Mat4, m seamMark) {
 // drawHand draws the aiming beam, its reticle, and the loaded and next beads
 // floating at the controller.
 func (r *Renderer) drawHand(world mgl32.Mat4, g *game.Game, o, d mgl32.Vec3, now float64) {
-	end, seam, hit := r.aimTarget(g, o, d)
+	end, _, _ := r.aimTarget(g, o, d)
 	r.drawBeam(world, o, end)
-	if hit {
-		r.drawSeam(world, seam)
-	}
 
 	// Loaded bead at the muzzle, the spare just below it.
 	r.drawBallWorld(world, o.Add(d.Mul(0.10)), game.BallR, g.Loaded, now)

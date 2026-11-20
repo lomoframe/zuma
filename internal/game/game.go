@@ -161,6 +161,7 @@ func New(seed int64) *Game {
 		Best:         0,
 	}
 	g.Level = 1
+	g.Path = NewPathForLevel(g.Level, g.Rng)
 	g.startLevel()
 	return g
 }
@@ -169,6 +170,7 @@ func New(seed int64) *Game {
 // come in.
 func (g *Game) startLevel() {
 	spec := SpecFor(g.Level)
+	g.Path = NewPathForLevel(g.Level, g.Rng)
 	g.LevelSpec = spec
 	g.Speed = spec.Speed
 	g.State = StatePlaying
@@ -641,6 +643,19 @@ func (g *Game) matchAt(idx int) {
 	g.Score += gain
 	g.Events = append(g.Events, Event{Kind: EventMatch, Value: mult})
 	g.Flash = 1
+	// A combo knocks the whole chain back, away from the hole.
+	if g.Combo >= 2 {
+		knock := float32(g.Combo) * 0.10
+		if knock > 0.7 {
+			knock = 0.7
+		}
+		for i := range g.Balls {
+			g.Balls[i].S -= knock
+			if g.Balls[i].S < 0 {
+				g.Balls[i].S = 0
+			}
+		}
+	}
 	mid := g.Path.PointAt((g.Balls[lo].S + g.Balls[hi].S) / 2)
 	g.Popups = append(g.Popups, Popup{
 		Pos:  mid,

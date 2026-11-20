@@ -233,6 +233,7 @@ func main() {
 			a.fire()
 		}
 		a.g.Update(float32(dt))
+		a.r.SetPath(a.g.Path)
 		a.playEvents()
 
 		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
@@ -314,7 +315,14 @@ func (a *app) playEvents() {
 		case game.EventMatch:
 			audio.Play(audio.Pop, 0.8)
 			if e.Value > 1 {
-				audio.Play(audio.Combo, 0.55)
+				// Each combo step gets a higher, louder impact so the level is
+				// audible without watching the HUD.
+				pitch := 1.0 + 0.09*float32(e.Value-1)
+				gain := 0.45 + 0.06*float32(e.Value)
+				if gain > 1.0 {
+					gain = 1.0
+				}
+				audio.PlayPitched(audio.Combo, gain, pitch)
 			}
 		case game.EventWin:
 			audio.Play(audio.Win, 0.8)
