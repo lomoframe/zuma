@@ -49,10 +49,11 @@ type Ball struct {
 	ID    int
 }
 
-// Shot is a ball in flight, on the board plane.
+// Shot is a ball in flight: the player's controller fires it into the board,
+// so it travels in three dimensions until it meets a bead.
 type Shot struct {
-	Pos   mgl32.Vec2
-	Vel   mgl32.Vec2
+	Pos   mgl32.Vec3
+	Vel   mgl32.Vec3
 	Color int
 }
 
@@ -128,7 +129,6 @@ type Game struct {
 
 	Loaded int
 	Next   int
-	Aim    mgl32.Vec2
 
 	Rng *rand.Rand
 
@@ -208,7 +208,6 @@ func (g *Game) startLevel() {
 	}
 	g.Loaded = g.randColor(spec.Colors)
 	g.Next = g.randColor(spec.Colors)
-	g.Aim = mgl32.Vec2{0, 1}
 }
 
 func (g *Game) randColor(n int) int {
@@ -235,25 +234,18 @@ func (g *Game) NextLevel() {
 	g.startLevel()
 }
 
-// SetAim points the frog at a board-space target.
-func (g *Game) SetAim(target mgl32.Vec2) {
-	d := target.Sub(Turret)
-	if d.Len() < 0.05 {
-		return
-	}
-	g.Aim = d.Normalize()
-}
-
-// Fire launches the loaded ball along the current aim.
-func (g *Game) Fire() bool {
+// Fire launches the loaded ball from the player's controller along dir. Both
+// are in board space; the caller converts the headset ray with the board
+// inverse transform.
+func (g *Game) Fire(origin, dir mgl32.Vec3) bool {
 	if g.State != StatePlaying || len(g.Shots) >= maxInAir {
 		return false
 	}
-	dir := g.Aim
-	if dir.Len() < 0.5 {
-		dir = mgl32.Vec2{0, -1}
+	if dir.Len() < 1e-4 {
+		return false
 	}
-	start := Turret.Add(dir.Mul(0.26))
+	dir = dir.Normalize()
+	start := origin.Add(dir.Mul(0.06))
 	g.Shots = append(g.Shots, Shot{Pos: start, Vel: dir.Mul(shotSpeed), Color: g.Loaded})
 	g.Events = append(g.Events, Event{Kind: EventShoot})
 	g.Loaded = g.Next
@@ -293,11 +285,6 @@ func (g *Game) TakeEvents() []Event {
 	return out
 }
 
-// Muzzle returns the board point where the loaded ball sits.
-func (g *Game) Muzzle() mgl32.Vec2 {
-	return Turret.Add(g.Aim.Mul(0.26))
-}
-
 // PushFrom and Push describe the insertion recoil used by the renderer.
 func (g *Game) PushFrom() int { return g.pushFrom }
 
@@ -308,11 +295,6 @@ func (g *Game) Push() float32 { return g.push }
 // offer a restart.
 func (g *Game) LoseReady() bool {
 	return g.State == StateLost && (len(g.Balls) == 0 || g.loseT > 2.6)
-}
-
-// AimYaw is the frog's heading; its local forward is +Z.
-func (g *Game) AimYaw() float32 {
-	return float32(math.Atan2(float64(g.Aim.X()), float64(g.Aim.Y())))
 }
 
 // BallPos is the board position of a chain bead.
@@ -496,7 +478,9 @@ func (g *Game) moveShots(dt float32) {
 			g.insert(hit, idx, sh.Color)
 			continue
 		}
-		if p1.Len() > BoardRadius+0.6 {
+		// A miss leaves the board volume: below the table, above the player or
+		// far outside the rim.
+		if p1.Y() < -0.2 || p1.Y() > 3.5 || (mgl32.Vec2{p1.X(), p1.Z()}).Len() > BoardRadius+1.2 {
 			continue
 		}
 		sh.Pos = p1
@@ -505,32 +489,34 @@ func (g *Game) moveShots(dt float32) {
 	g.Shots = keep
 }
 
-// hitTest finds the chain bead closest to the shot segment. It returns the hit
-// point and the bead index, or -1.
-func (g *Game) hitTest(p0, p1 mgl32.Vec2) (mgl32.Vec2, int) {
-	best := float32(math.MaxFloat32)
+// hitTest finds the first bead the shot segment passes through. Beads sit at
+// ball height on the board, so the test is a 3D point-to-segment distance.
+func (g *Game) hitTest(p0, p1 mgl32.Vec3) (mgl32.Vec3, int) {
+	bestT := float32(math.MaxFloat32)
 	bestIdx := -1
-	var bestPos mgl32.Vec2
+	var bestPos mgl32.Vec3
 	for i, b := range g.Balls {
-		c := g.Path.PointAt(b.S)
-		d := pointSegDist(c, p0, p1)
-		if d < best {
-			best = d
+		q := g.Path.PointAt(b.S)
+		c := mgl32.Vec3{q.X(), BallR, q.Y()}
+		t, d := segPoint(p0, p1, c)
+		if d <= Diam*0.92 && t < bestT {
+			bestT = t
 			bestIdx = i
 			bestPos = c
 		}
 	}
-	if bestIdx >= 0 && best <= Diam*0.92 {
+	if bestIdx >= 0 {
 		return bestPos, bestIdx
 	}
-	return mgl32.Vec2{}, -1
+	return mgl32.Vec3{}, -1
 }
 
-func pointSegDist(p, a, b mgl32.Vec2) float32 {
+// segPoint returns the parameter of the closest point on a-b and the distance.
+func segPoint(a, b, p mgl32.Vec3) (float32, float32) {
 	ab := b.Sub(a)
 	l2 := ab.LenSqr()
 	if l2 <= 1e-12 {
-		return p.Sub(a).Len()
+		return 0, p.Sub(a).Len()
 	}
 	t := p.Sub(a).Dot(ab) / l2
 	if t < 0 {
@@ -538,19 +524,19 @@ func pointSegDist(p, a, b mgl32.Vec2) float32 {
 	} else if t > 1 {
 		t = 1
 	}
-	proj := a.Add(ab.Mul(t))
-	return p.Sub(proj).Len()
+	return t, p.Sub(a.Add(ab.Mul(t))).Len()
 }
 
 // insert pushes the shot ball into the chain at the hit bead, then resolves any
 // match it made.
-func (g *Game) insert(hitPos mgl32.Vec2, k int, color int) {
+func (g *Game) insert(hitPos mgl32.Vec3, k int, color int) {
 	if k < 0 || k >= len(g.Balls) {
 		return
 	}
 	_, tan := g.Path.At(g.Balls[k].S)
+	hit2 := mgl32.Vec2{hitPos.X(), hitPos.Z()}
 	j := k
-	if hitPos.Sub(g.Path.PointAt(g.Balls[k].S)).Dot(tan) > 0 {
+	if hit2.Sub(g.Path.PointAt(g.Balls[k].S)).Dot(tan) > 0 {
 		j = k // ahead of the bead, towards the hole
 	} else {
 		j = k + 1

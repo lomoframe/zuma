@@ -77,7 +77,8 @@ func TestInsertPushesTailBack(t *testing.T) {
 		{S: 3.628, Color: 4, ID: 4},
 	}
 	pos, tan := g.Path.At(3.876)
-	g.insert(pos.Add(tan.Mul(0.04)), 1, 5) // hit the front half of bead 2: goes in ahead of it
+	hit := mgl32.Vec3{pos.X() + tan.X()*0.04, BallR, pos.Y() + tan.Y()*0.04}
+	g.insert(hit, 1, 5) // hit the front half of bead 2: goes in ahead of it
 	if len(g.Balls) != 5 {
 		t.Fatalf("want 5 beads, got %d", len(g.Balls))
 	}
@@ -116,25 +117,27 @@ func TestGapClosingTriggersChainReaction(t *testing.T) {
 
 func TestFireReloadsAndShootsAlongAim(t *testing.T) {
 	g := New(7)
-	g.SetAim(mgl32.Vec2{0, -1})
-	if math.Abs(float64(g.Aim.X())) > 1e-5 || math.Abs(float64(g.Aim.Y()+1)) > 1e-5 {
-		t.Fatalf("aim not applied: %v", g.Aim)
-	}
+	origin := mgl32.Vec3{0, 1.0, 1.2}
+	dir := mgl32.Vec3{0, -0.6, -0.8}.Normalize()
 	loaded, next := g.Loaded, g.Next
-	if !g.Fire() {
-		t.Fatal("Fire refused while the frog was free")
+	if !g.Fire(origin, dir) {
+		t.Fatal("Fire refused while the launcher was free")
 	}
 	if len(g.Shots) != 1 {
 		t.Fatalf("want one ball in the air, got %d", len(g.Shots))
 	}
-	if g.Loaded != next {
-		t.Fatalf("reload did not rotate the colours: loaded %d, next %d", g.Loaded, g.Next)
-	}
 	if g.Shots[0].Color != loaded {
 		t.Fatalf("shot colour %d, want the loaded %d", g.Shots[0].Color, loaded)
 	}
-	if g.Shots[0].Vel.Y() > -1 {
-		t.Fatalf("shot not aimed at the board: %v", g.Shots[0].Vel)
+	if g.Loaded != next {
+		t.Fatalf("reload did not rotate the colours: loaded %d, next %d", g.Loaded, g.Next)
+	}
+	// The bead must start at the controller and travel away along the ray.
+	if g.Shots[0].Pos.Sub(origin).Len() > 0.2 {
+		t.Fatalf("shot spawned away from the controller: %v", g.Shots[0].Pos)
+	}
+	if g.Shots[0].Vel.Normalize().Dot(dir) < 0.999 {
+		t.Fatalf("shot direction %v, want %v", g.Shots[0].Vel, dir)
 	}
 }
 
@@ -191,13 +194,14 @@ func TestShotPopsMatchEndToEnd(t *testing.T) {
 		{S: 5.00 - Diam, Color: 2, ID: 2},
 	}
 	g.Loaded = 2
-	g.SetAim(g.Path.PointAt(5.0))
-	if !g.Fire() {
+	// Aim from above the table, the way a controller points down at the board.
+	p := g.Path.PointAt(5.0)
+	origin := mgl32.Vec3{p.X(), 0.95, p.Y() + 0.85}
+	target := mgl32.Vec3{p.X(), BallR, p.Y()}
+	if !g.Fire(origin, target.Sub(origin).Normalize()) {
 		t.Fatal("fire refused")
 	}
-	// The frog is in the middle of the spiral, so the bead is a metre or two
-	// away; half a second is plenty at 7.4 m/s.
-	for i := 0; i < 120; i++ {
+	for i := 0; i < 240; i++ {
 		g.Update(1.0 / 120.0)
 	}
 	if len(g.Balls) != 0 {

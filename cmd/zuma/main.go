@@ -28,13 +28,25 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn     bool
-	eyes     [2]*gl.RenderTarget
-	board    mgl32.Mat4
-	boardInv mgl32.Mat4
-	prevTrig bool
-	vrAimOK  bool
-	vrAim    mgl32.Vec2
+	vrOn       bool
+	eyes       [2]*gl.RenderTarget
+	board      mgl32.Mat4
+	boardInv   mgl32.Mat4
+	prevTrig   bool
+	vrAimOK    bool
+	vrAim      mgl32.Vec2
+	vrDebug    bool
+	vrFrames   int
+	lastVRLog  float64
+	vrRetryAt  float64
+	vrFailLog  float64
+	aimNote    string
+	aimO       mgl32.Vec3
+	aimD       mgl32.Vec3
+	aimOK      bool
+	aimFlip    bool
+	aimFlipSet bool
+	msaa       int32
 }
 
 const (
@@ -52,6 +64,7 @@ func main() {
 	frames := flag.Int("frames", 40, "frames to render before the screenshot")
 	seed := flag.Int64("seed", 7, "random seed")
 	msaa := flag.Int("msaa", 4, "MSAA samples for the VR eye textures")
+	vrDebug := flag.Bool("vr-debug", false, "log head/controller/aim once per second")
 	aimX := flag.Float64("aim-x", 0, "board-space aim point x used by -screenshot")
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
@@ -106,39 +119,24 @@ func main() {
 	}
 	a.boardInv = a.board.Inv()
 
+	a.vrDebug = *vrDebug
+	a.msaa = int32(*msaa)
 	// Screenshots are a desktop feature: the compositor owns the headset.
-	if *useVR && !*desktop && *shot == "" {
-		if !vr.Present() {
-			log.Printf("no headset detected — desktop view")
-		} else if err := vr.Init(); err != nil {
-			log.Printf("OpenVR init failed: %v — desktop view", err)
-		} else {
-			defer vr.Shutdown()
-			a.vrOn = true
-			ew, eh := vr.RenderTargetSize()
-			for eye := 0; eye < 2; eye++ {
-				rt, err := gl.NewRenderTarget(ew, eh, int32(*msaa))
-				if err != nil {
-					log.Fatalf("eye render target: %v", err)
-				}
-				a.eyes[eye] = rt
-			}
-			log.Printf("VR active: %dx%d per eye, msaa %dx", ew, eh, *msaa)
+	canVR := *useVR && !*desktop && *shot == ""
+	if canVR {
+		if !a.enableVR() {
+			log.Printf("headset not ready — desktop view, retrying every 2 s")
 		}
 	} else {
 		log.Printf("desktop view")
 	}
-
-	if a.vrOn {
-		glfw.SwapInterval(0)
-	} else {
+	if !a.vrOn {
 		glfw.SwapInterval(1)
 	}
 
 	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, _ glfw.ModifierKey) {
 		if button == glfw.MouseButton1 && action == glfw.Press {
-			a.g.Fire()
-			a.playEvents()
+			a.fire()
 		}
 	})
 
@@ -154,8 +152,7 @@ func main() {
 			a.playEvents()
 			log.Printf("restarted")
 		case glfw.KeySpace:
-			a.g.Fire()
-			a.playEvents()
+			a.fire()
 		}
 	})
 
@@ -166,7 +163,11 @@ func main() {
 	frame := 0
 	shotDone := false
 	if *shot != "" {
-		a.g.SetAim(mgl32.Vec2{float32(*aimX), float32(*aimY)})
+		target := mgl32.Vec3{float32(*aimX), 0.02, float32(*aimY)}
+		hand := mgl32.Vec3{target[0] * 0.5, 0.95, target[2] + 1.6}
+		a.aimO = hand
+		a.aimD = target.Sub(hand).Normalize()
+		a.aimOK = true
 	}
 	if *demo != "" {
 		a.g.DemoState(*demo)
@@ -197,13 +198,13 @@ func main() {
 			if err := vr.WaitPoses(); err != nil {
 				log.Printf("WaitGetPoses: %v", err)
 			}
-			a.updateVRAim()
+			a.updateVRAim(now)
 		} else if *shot == "" {
 			a.updateMouseAim(win)
 		}
 
 		if *shot != "" && *fire && frame == 8 {
-			a.g.Fire()
+			a.fire()
 		}
 		a.g.Update(float32(dt))
 		a.playEvents()
@@ -230,6 +231,38 @@ func main() {
 			break
 		}
 	}
+	if a.vrOn {
+		vr.Shutdown()
+	}
+}
+
+// enableVR brings SteamVR up and allocates the eye targets. It is retried from
+// the main loop so the game can start before a wireless headset finishes
+// connecting.
+func (a *app) enableVR() bool {
+	if !vr.Present() {
+		return false
+	}
+	if err := vr.Init(); err != nil {
+		now := glfw.GetTime()
+		if now-a.vrFailLog > 10 {
+			a.vrFailLog = now
+			log.Printf("OpenVR init failed: %v", err)
+		}
+		return false
+	}
+	a.vrOn = true
+	ew, eh := vr.RenderTargetSize()
+	for eye := 0; eye < 2; eye++ {
+		rt, err := gl.NewRenderTarget(ew, eh, a.msaa)
+		if err != nil {
+			log.Fatalf("eye render target: %v", err)
+		}
+		a.eyes[eye] = rt
+	}
+	glfw.SwapInterval(0)
+	log.Printf("VR active: %dx%d per eye, msaa %dx", ew, eh, a.msaa)
+	return true
 }
 
 // playEvents maps gameplay moments to the synthesised clips.
@@ -283,7 +316,7 @@ func (a *app) renderDesktop(now float64) {
 	w, h := currentWindow.GetFramebufferSize()
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
-	a.r.Draw(vp, eye, mgl32.Ident4(), a.g, now)
+	a.r.Draw(vp, eye, mgl32.Ident4(), a.g, now, a.aimO, a.aimD, a.aimOK)
 }
 
 func (a *app) renderMirror(now float64) {
@@ -299,7 +332,7 @@ func (a *app) renderMirror(now float64) {
 	gl.BindFramebuffer(0)
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
-	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now)
+	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK)
 }
 
 func (a *app) renderEyes(now float64) {
@@ -319,13 +352,14 @@ func (a *app) renderEyes(now float64) {
 		rt.Bind()
 		gl.Viewport(0, 0, rt.W, rt.H)
 		clearScene()
-		a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now)
+		a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK)
 		rt.Resolve()
 		gl.Flush()
 		rt.Unbind()
 		if err := vr.Submit(eye, rt.Tex); err != nil {
 			log.Printf("submit eye %d: %v", eye, err)
 		}
+		a.vrFrames++
 	}
 }
 
@@ -338,9 +372,19 @@ func clearScene() {
 // it through every call.
 var currentWindow *glfw.Window
 
-// updateMouseAim aims the frog where the cursor ray meets the board plane.
+// fire launches the loaded bead along the current aim ray.
+func (a *app) fire() bool {
+	if !a.aimOK {
+		return false
+	}
+	ok := a.g.Fire(a.aimO, a.aimD)
+	a.playEvents()
+	return ok
+}
+
+// updateMouseAim turns the cursor into a board-space shot ray.
 func (a *app) updateMouseAim(win *glfw.Window) {
-	vp, _ := a.viewProj(win)
+	vp, eye := a.viewProj(win)
 	ww, wh := win.GetSize()
 	fw, fh := win.GetFramebufferSize()
 	if ww <= 0 || wh <= 0 || fw <= 0 || fh <= 0 {
@@ -352,56 +396,107 @@ func (a *app) updateMouseAim(win *glfw.Window) {
 	ndcX := float32(2*px/float64(fw) - 1)
 	ndcY := float32(1 - 2*py/float64(fh))
 	p, ok := rayPlane(vp.Inv(), ndcX, ndcY, 0.02)
-	if ok {
-		a.g.SetAim(mgl32.Vec2{p[0], p[2]})
-	}
-}
-
-// updateVRAim points the frog where the right controller ray meets the board.
-func (a *app) updateVRAim() {
-	a.vrAimOK = false
-	dev, st, ok := vr.Controller(vr.RightHand)
 	if !ok {
 		return
 	}
-	if p, hit := a.controllerBoardPoint(int(dev)); hit {
-		a.vrAimOK = true
-		a.vrAim = p
-		a.g.SetAim(p)
+	d := p.Sub(eye)
+	if d.Len() < 0.1 {
+		return
 	}
+	d = d.Normalize()
+	a.aimO = eye.Add(d.Mul(0.55))
+	a.aimD = d
+	a.aimOK = true
+}
+
+// updateVRAim takes the right controller's aim pose as the shot ray. When no
+// controller is tracked it falls back to the head gaze, so a laser is always
+// visible in the headset.
+func (a *app) updateVRAim(now float64) {
+	dev, st, ok := vr.Controller(vr.RightHand)
+	if !ok {
+		for _, d := range vr.ControllerDevices() {
+			if s, sok := vr.ControllerAt(uint32(d)); sok {
+				dev, st, ok = uint32(d), s, true
+				break
+			}
+		}
+	}
+	if !ok {
+		a.aimOK = false
+		a.aimNote = "no-controller"
+		a.logVR(now, st, ok, dev)
+		return
+	}
+
+	m, poseOK := vr.ControllerAim(int(dev))
+	if !poseOK {
+		if hm, hok := vr.Pose(0); hok {
+			m = hm
+			poseOK = true
+			a.aimNote = "head-fallback"
+		}
+	}
+	if poseOK {
+		o := mgl32.Vec3{m[12], m[13], m[14]}
+		d := mgl32.Vec3{-m[8], -m[9], -m[10]}
+		if d.Len() > 0.5 {
+			d = d.Normalize()
+			// The frame controllers report the aim pose with the opposite Z
+			// direction. Gameplay always aims down at the table, so take the
+			// downward branch whichever way the driver reports it.
+			if d.Y() > -0.02 {
+				d = d.Mul(-1)
+				a.aimNote = "flipped"
+			}
+			a.aimO, a.aimD = a.boardRay(o, d)
+			a.aimOK = true
+		} else {
+			a.aimNote = "bad-dir"
+		}
+	}
+
 	if st.Trigger && !a.prevTrig {
 		if a.g.LoseReady() {
 			a.g.Restart()
 			a.playEvents()
 		} else {
-			a.g.Fire()
-			a.playEvents()
+			a.fire()
 		}
 	}
 	a.prevTrig = st.Trigger
+	a.logVR(now, st, ok, dev)
 }
 
-func (a *app) controllerBoardPoint(dev int) (mgl32.Vec2, bool) {
-	m, ok := vr.ControllerAim(dev)
-	if !ok {
-		return mgl32.Vec2{}, false
+// boardRay converts a world-space ray into board space.
+func (a *app) boardRay(o, d mgl32.Vec3) (mgl32.Vec3, mgl32.Vec3) {
+	po := a.boardInv.Mul4x1(mgl32.Vec4{o[0], o[1], o[2], 1})
+	pd := a.boardInv.Mul4x1(mgl32.Vec4{o[0] + d[0], o[1] + d[1], o[2] + d[2], 1})
+	bo := mgl32.Vec3{po[0], po[1], po[2]}
+	bd := mgl32.Vec3{pd[0] - po[0], pd[1] - po[1], pd[2] - po[2]}
+	if bd.Len() < 1e-6 {
+		return bo, mgl32.Vec3{0, -1, 0}
 	}
-	origin := mgl32.Vec3{m[12], m[13], m[14]}
-	dir := mgl32.Vec3{-m[8], -m[9], -m[10]}
-	if dir.Len() < 0.5 {
-		return mgl32.Vec2{}, false
+	return bo, bd.Normalize()
+}
+
+// logVR prints one diagnostic line per second in the headset.
+func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32) {
+	if !a.vrDebug || now-a.lastVRLog < 1.0 {
+		return
 	}
-	dir = dir.Normalize()
-	if dir[1] > -0.05 {
-		return mgl32.Vec2{}, false
+	a.lastVRLog = now
+	hp := "none"
+	if head, ok := vr.Pose(0); ok {
+		hp = fmt.Sprintf("(%.2f,%.2f,%.2f)", head[12], head[13], head[14])
 	}
-	t := (vrBoardY - origin[1]) / dir[1]
-	if t <= 0 || t > 8 {
-		return mgl32.Vec2{}, false
+	_, _, leftOK := vr.Controller(vr.LeftHand)
+	aim := "miss:" + a.aimNote
+	if a.aimOK {
+		aim = fmt.Sprintf("o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", a.aimO[0], a.aimO[1], a.aimO[2], a.aimD[0], a.aimD[1], a.aimD[2])
 	}
-	hit := origin.Add(dir.Mul(t))
-	local := a.boardInv.Mul4x1(mgl32.Vec4{hit[0], hit[1], hit[2], 1})
-	return mgl32.Vec2{local[0], local[2]}, true
+	log.Printf("vr head=%s dev=%d left=%v right=%v aim=%s trig=%.2f btn=%v frames=%d", hp, dev, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.vrFrames)
+	a.vrFrames = 0
 }
 
 // rayPlane intersects an NDC ray with the y=plane horizontal plane.

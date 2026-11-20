@@ -232,6 +232,42 @@ func ControllerAxes(device uint32) ([5][2]float32, bool) {
 	return axes, true
 }
 
+// ControllerDevices lists every tracked device SteamVR classifies as a
+// controller, independent of the left/right role assignment.
+func ControllerDevices() []int {
+	out := make([]C.uint, 16)
+	n := int(C.govr_vr_controller_list(&out[0], C.int(len(out))))
+	if n <= 0 {
+		return nil
+	}
+	devs := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		devs = append(devs, int(out[i]))
+	}
+	return devs
+}
+
+// ControllerAt reads the state of an explicit controller device.
+func ControllerAt(dev uint32) (ControllerState, bool) {
+	var ax, ay, trig C.float
+	var raw C.ulonglong
+	if C.govr_vr_controller_state(C.uint(dev), &ax, &ay, &trig, &raw) == 0 {
+		return ControllerState{}, false
+	}
+	pressed := uint64(raw)
+	return ControllerState{
+		AxisX:       float32(ax),
+		AxisY:       float32(ay),
+		TriggerAxis: float32(trig),
+		Raw:         pressed,
+		Trigger:     pressed&buttonTrigger != 0,
+		Grip:        pressed&buttonGrip != 0,
+		A:           pressed&buttonA != 0,
+		Menu:        pressed&buttonMenu != 0,
+		Stick:       pressed&buttonStick != 0,
+	}, true
+}
+
 // Controller resolves a hand role to a device and reads its current state.
 func Controller(hand int) (uint32, ControllerState, bool) {
 	var dev C.uint

@@ -360,6 +360,21 @@ int govr_vr_controller(int hand, unsigned int *device) {
     return 0;
 }
 
+// govr_vr_controller_list enumerates controllers by device class, so a pad
+// still works when SteamVR has not assigned it a left/right role.
+int govr_vr_controller_list(unsigned int *out, int max) {
+    if (g_sys == nullptr || out == nullptr) {
+        return 0;
+    }
+    int n = 0;
+    for (uint32_t i = 0; i < vr::k_unMaxTrackedDeviceCount && n < max; i++) {
+        if (g_sys->GetTrackedDeviceClass(i) == vr::TrackedDeviceClass_Controller) {
+            out[n++] = i;
+        }
+    }
+    return n;
+}
+
 int govr_vr_controller_state(unsigned int device, float *axis_x, float *axis_y, float *trigger_axis,
                              unsigned long long *raw_buttons) {
     if (g_sys == nullptr || device >= vr::k_unMaxTrackedDeviceCount) {

@@ -49,6 +49,7 @@ int govr_vr_controller_aim(unsigned int device, float *out12);
 
 /* hand: 0 = left, 1 = right. Returns 0 and fills device when present. */
 int govr_vr_controller(int hand, unsigned int *device);
+int govr_vr_controller_list(unsigned int *out, int max);
 /* Raw stick axes, analog trigger and ulButtonPressed; the semantic button bits
  * are decoded in Go. */
 int govr_vr_controller_touched(unsigned int device, unsigned long long *raw_touched);

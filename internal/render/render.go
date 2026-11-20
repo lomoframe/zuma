@@ -51,11 +51,16 @@ in vec4 vCol;
 uniform vec4 uTint;
 uniform vec3 uCam;
 uniform float uGloss;
+uniform float uUnlit;
 out vec4 frag;
 void main() {
         vec3 n = normalize(vNrm);
         vec3 L = normalize(vec3(0.38, 0.88, 0.30));
         vec3 base = vCol.rgb * uTint.rgb;
+        if (uUnlit > 0.5) {
+                frag = vec4(base, vCol.a * uTint.a);
+                return;
+        }
         float d = max(dot(n, L), 0.0);
         vec3 amb = vec3(0.30, 0.37, 0.48);
         vec3 col = base * (amb + d * vec3(1.06, 0.99, 0.88) * 0.82);
@@ -195,13 +200,14 @@ type Renderer struct {
 	meshProg gl.Program
 	textProg gl.Program
 
-	uVP, uModel, uTint, uCam, uGloss int32
-	uMVP, uTex, uColor               int32
+	uVP, uModel, uTint, uCam, uGloss, uUnlit int32
+	uMVP, uTex, uColor                       int32
 
 	board *Mesh
 	frog  *Mesh
 	ball  *Mesh
 	ring  *Mesh
+	beam  *Mesh
 	quad  *textQuad
 
 	texts map[string]*textTex
@@ -225,6 +231,7 @@ func New() (*Renderer, error) {
 		uTint:    mp.Loc("uTint"),
 		uCam:     mp.Loc("uCam"),
 		uGloss:   mp.Loc("uGloss"),
+		uUnlit:   mp.Loc("uUnlit"),
 		uMVP:     tp.Loc("uMVP"),
 		uTex:     tp.Loc("uTex"),
 		uColor:   tp.Loc("uColor"),
@@ -235,6 +242,7 @@ func New() (*Renderer, error) {
 	r.frog = upload(buildFrog())
 	r.ball = upload(buildBall())
 	r.ring = upload(buildRing())
+	r.beam = upload(buildBeam())
 	r.quad = newTextQuad()
 	return r, nil
 }
@@ -242,6 +250,30 @@ func New() (*Renderer, error) {
 func buildBall() *Builder {
 	b := &Builder{}
 	b.sphere(mgl32.Vec3{}, 1, rgba(1, 1, 1, 1), 26, 14)
+	return b
+}
+
+// buildBeam is a unit cylinder along +Z, centred on the origin: scale it to a
+// length and orient it between the hand and the aim point.
+func buildBeam() *Builder {
+	b := &Builder{}
+	const seg = 10
+	base := uint32(len(b.verts))
+	for i := 0; i <= seg; i++ {
+		a := float32(i) / seg * 2 * math.Pi
+		ca, sa := float32(math.Cos(float64(a))), float32(math.Sin(float64(a)))
+		n := mgl32.Vec3{ca, sa, 0}
+		b.vertex(mgl32.Vec3{ca, sa, -0.5}, n, rgba(1, 1, 1, 1))
+		b.vertex(mgl32.Vec3{ca, sa, 0.5}, n, rgba(1, 1, 1, 1))
+	}
+	for i := 0; i < seg; i++ {
+		a := base + uint32(i*2)
+		c := a + 1
+		d := a + 2
+		e := a + 3
+		b.tri(a, e, c)
+		b.tri(a, d, e)
+	}
 	return b
 }
 
@@ -257,8 +289,8 @@ func buildBoard(path *game.Path) *Builder {
 	b := &Builder{}
 	wood := rgba(0.22, 0.14, 0.10, 1)
 	woodDark := rgba(0.10, 0.065, 0.05, 1)
-	felt := rgba(0.040, 0.128, 0.135, 1)
-	feltHi := rgba(0.05, 0.145, 0.15, 1)
+	felt := rgba(0.105, 0.300, 0.305, 1)
+	feltHi := rgba(0.14, 0.36, 0.36, 1)
 	copper := rgba(0.66, 0.43, 0.17, 1)
 	stone := rgba(0.22, 0.23, 0.26, 1)
 	panel := rgba(0.055, 0.075, 0.095, 1)
@@ -278,10 +310,10 @@ func buildBoard(path *game.Path) *Builder {
 	b.torus(0, 0, game.BoardRadius-0.05, 0.022, 0.012, copper, seg, 10)
 
 	// The groove: a channel just wide enough for the beads, with two lit lips.
-	b.ribbon(path, game.Diam*1.75, 0.0120, rgba(0.090, 0.200, 0.200, 1))
-	b.ribbon(path, game.Diam*1.45, 0.0128, rgba(0.006, 0.014, 0.016, 1))
-	b.ribbonOffset(path, game.Diam*0.30, game.Diam*0.88, 0.0140, rgba(0.16, 0.32, 0.31, 1))
-	b.ribbonOffset(path, game.Diam*0.30, -game.Diam*0.88, 0.0140, rgba(0.16, 0.32, 0.31, 1))
+	b.ribbon(path, game.Diam*1.75, 0.0120, rgba(0.030, 0.075, 0.078, 1))
+	b.ribbon(path, game.Diam*1.45, 0.0128, rgba(0.004, 0.010, 0.012, 1))
+	b.ribbonOffset(path, game.Diam*0.34, game.Diam*0.88, 0.0140, rgba(0.20, 0.46, 0.45, 1))
+	b.ribbonOffset(path, game.Diam*0.34, -game.Diam*0.88, 0.0140, rgba(0.20, 0.46, 0.45, 1))
 
 	// Entry mouth at s=0.
 	pos, _ := path.At(0)
@@ -354,7 +386,7 @@ func ballColor(i int) mgl32.Vec4 {
 
 // Draw renders one frame. vp is in world space; world maps board space into
 // the world (identity for the desktop camera).
-func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game.Game, now float64) {
+func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game.Game, now float64, aimO, aimD mgl32.Vec3, aimOK bool) {
 	r.meshProg.Bind()
 	r.meshProg.Mat4(r.uVP, vp)
 	r.meshProg.Vec3(r.uCam, cam[0], cam[1], cam[2])
@@ -395,37 +427,10 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		r.ball.draw()
 	}
 
-	// Frog, plus the loaded and the next ball.
-	frogWorld := world.
-		Mul4(mgl32.Translate3D(game.Turret.X(), 0, game.Turret.Y())).
-		Mul4(mgl32.HomogRotate3DY(g.AimYaw())).
-		Mul4(mgl32.Scale3D(1.15, 1.15, 1.15))
-	r.meshProg.Mat4(r.uModel, frogWorld)
-	r.meshProg.Vec4(r.uTint, 1, 1, 1, 1)
-	r.meshProg.Float(r.uGloss, 0.5)
-	r.frog.draw()
-
-	r.drawBallAtHeight(world, g.Muzzle().Mul(1.15), 0.105, game.BallR, g.Loaded, now)
-	nextPos := mgl32.Vec2{game.Turret.X() - 0.245, game.Turret.Y() - 0.02}
-	r.drawBallAtHeight(world, nextPos, game.BallR*0.62, game.BallR*0.62, g.Next, now*0.7)
-
-	// Aim guide: a dotted line and a reticle where the shot will land.
-	aimLen := float32(1.25)
-	tip := game.Turret.Add(g.Aim.Mul(aimLen))
-	if tip.Len() > game.BoardRadius-0.12 {
-		tip = tip.Mul((game.BoardRadius - 0.12) / tip.Len())
-	}
-	for i := 1; i <= 6; i++ {
-		f := float32(i) / 7
-		dot := game.Turret.Add(g.Aim.Mul(0.30 + (tip.Sub(game.Turret).Len()-0.30)*f))
-		r.drawDot(world, dot, game.BallR*0.22)
-	}
-	r.drawRing(world, tip, 0.062, rgba(0.72, 0.96, 1.0, 0.55))
-
-	for _, p := range g.Popups {
-		f := 1 - p.Life/p.Max
-		base := world.Mul4(mgl32.Translate3D(p.Pos.X(), 0.12+f*0.30, p.Pos.Y()+0.06))
-		r.drawText(vp, base, 0, 0, 40, p.Text, true, rgba(1.0, 0.90, 0.45, 0.35+0.65*(1-f)))
+	// The player is the launcher: a beam leaves the controller and a bead
+	// waits at its tip.
+	if aimOK {
+		r.drawHand(world, g, aimO, aimD, now)
 	}
 
 	r.drawHUD(vp, world, g, now)
@@ -465,6 +470,105 @@ func (r *Renderer) drawRing(world mgl32.Mat4, at mgl32.Vec2, radius float32, col
 	r.meshProg.Vec4(r.uTint, col[0], col[1], col[2], col[3])
 	r.meshProg.Float(r.uGloss, 0)
 	r.ring.draw()
+}
+
+// aimEnd returns where the aiming ray first meets a bead or the board.
+func (r *Renderer) aimEnd(g *game.Game, o, d mgl32.Vec3) mgl32.Vec3 {
+	end := o.Add(d.Mul(2.6))
+	bestT := float32(1e9)
+	for _, b := range g.Balls {
+		q := g.Path.PointAt(b.S)
+		c := mgl32.Vec3{q.X(), game.BallR, q.Y()}
+		oc := o.Sub(c)
+		bq := oc.Dot(d)
+		cq := oc.LenSqr() - 0.10*0.10
+		disc := bq*bq - cq
+		if disc <= 0 {
+			continue
+		}
+		t := -bq - float32(math.Sqrt(float64(disc)))
+		if t > 0.03 && t < bestT {
+			bestT = t
+			end = o.Add(d.Mul(t))
+		}
+	}
+	if bestT < 1e8 {
+		return end
+	}
+	if d.Y() < -0.01 {
+		t := (0.02 - o.Y()) / d.Y()
+		if t > 0.03 && t < 3.0 {
+			end = o.Add(d.Mul(t))
+		}
+	}
+	return end
+}
+
+// drawHand draws the aiming beam, its reticle, and the loaded and next beads
+// floating at the controller.
+func (r *Renderer) drawHand(world mgl32.Mat4, g *game.Game, o, d mgl32.Vec3, now float64) {
+	end := r.aimEnd(g, o, d)
+	r.drawBeam(world, o, end)
+	r.drawRingAt(world, end, 0.05, rgba(0.40, 0.95, 1.0, 0.85))
+
+	// Loaded bead at the muzzle, the spare just below it.
+	r.drawBallWorld(world, o.Add(d.Mul(0.10)), game.BallR, g.Loaded, now)
+	r.drawBallWorld(world, o.Add(mgl32.Vec3{0, -0.085, 0}).Add(d.Mul(0.03)), game.BallR*0.55, g.Next, now*0.7)
+}
+
+// drawBeam stretches the unit beam between two board-space points.
+func (r *Renderer) drawBeam(world mgl32.Mat4, from, to mgl32.Vec3) {
+	d := to.Sub(from)
+	l := d.Len()
+	if l < 1e-4 {
+		return
+	}
+	z := d.Mul(1 / l)
+	up := mgl32.Vec3{0, 1, 0}
+	if math.Abs(float64(z.Y())) > 0.95 {
+		up = mgl32.Vec3{1, 0, 0}
+	}
+	x := up.Cross(z).Normalize()
+	y := z.Cross(x)
+	c := from.Add(d.Mul(0.5))
+	m := mgl32.Mat4{
+		x.X(), x.Y(), x.Z(), 0,
+		y.X(), y.Y(), y.Z(), 0,
+		z.X(), z.Y(), z.Z(), 0,
+		c.X(), c.Y(), c.Z(), 1,
+	}
+	model := world.Mul4(m).Mul4(mgl32.Scale3D(0.020, 0.020, l))
+	r.meshProg.Mat4(r.uModel, model)
+	r.meshProg.Vec4(r.uTint, 0.40, 0.95, 1.0, 0.95)
+	r.meshProg.Float(r.uGloss, 0)
+	r.meshProg.Float(r.uUnlit, 1)
+	r.beam.draw()
+	r.meshProg.Float(r.uUnlit, 0)
+}
+
+func (r *Renderer) drawRingAt(world mgl32.Mat4, at mgl32.Vec3, radius float32, col mgl32.Vec4) {
+	model := world.
+		Mul4(mgl32.Translate3D(at.X(), at.Y()+0.003, at.Z())).
+		Mul4(mgl32.Scale3D(radius, radius, radius))
+	r.meshProg.Mat4(r.uModel, model)
+	r.meshProg.Vec4(r.uTint, col[0], col[1], col[2], col[3])
+	r.meshProg.Float(r.uGloss, 0)
+	r.meshProg.Float(r.uUnlit, 1)
+	r.ring.draw()
+	r.meshProg.Float(r.uUnlit, 0)
+}
+
+func (r *Renderer) drawBallWorld(world mgl32.Mat4, at mgl32.Vec3, radius float32, color int, phase float64) {
+	bob := float32(math.Sin(phase*4.0)) * radius * 0.12
+	model := world.
+		Mul4(mgl32.Translate3D(at.X(), at.Y()+bob, at.Z())).
+		Mul4(mgl32.Scale3D(radius, radius, radius))
+	c := ballColor(color)
+	r.meshProg.Mat4(r.uModel, model)
+	r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
+	r.meshProg.Float(r.uGloss, 1.2)
+	r.meshProg.Float(r.uUnlit, 0)
+	r.ball.draw()
 }
 
 // drawHUD lays the score plaque above the far rim.
