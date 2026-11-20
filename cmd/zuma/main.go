@@ -33,6 +33,7 @@ type app struct {
 	eyes        [2]*gl.RenderTarget
 	board       mgl32.Mat4
 	boardInv    mgl32.Mat4
+	placedBoard game.Board
 	tableWorld  mgl32.Mat4
 	tilt        mgl32.Mat4
 	prevTrig    bool
@@ -169,12 +170,7 @@ func main() {
 	renderer.StartSplash(splashStart, *title)
 
 	a.tableWorld = mgl32.Translate3D(0, vrBoardY, vrBoardZ).Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
-	tilt := mgl32.Translate3D(0, 0, boardHingeZ).
-		Mul4(mgl32.HomogRotate3DX(mgl32.DegToRad(boardTiltDeg))).
-		Mul4(mgl32.Translate3D(0, 0, -boardHingeZ))
-	a.tilt = tilt
-	a.board = a.tableWorld.Mul4(tilt)
-	a.boardInv = a.board.Inv()
+	a.placeBoard()
 
 	// Paint the loading cover before SteamVR comes up: vr.Init blocks for a
 	// second or two, and an empty window looks like a crash.
@@ -287,6 +283,9 @@ func main() {
 			a.g.Update(float32(dt))
 			a.r.SetPath(a.g.Board, a.g.Path)
 			a.playEvents()
+		}
+		if a.g.Board != a.placedBoard {
+			a.placeBoard()
 		}
 
 		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
@@ -600,6 +599,36 @@ func (a *app) updateVRAim(now float64) {
 	}
 	a.prevTrig = st.Trigger
 	a.logVR(now, st, ok, dev)
+}
+
+// placeBoard builds the board transform for the current level. The tilt pivots
+// on the board's own near edge, so the felt always meets the table no matter how
+// big the random board is; the angle is capped so a big board does not push its
+// far edge up towards eye height.
+func (a *app) placeBoard() {
+	bd := a.g.Board
+	hinge := bd.HalfH()
+	deg := float32(boardTiltDeg)
+	if hinge > 0.01 {
+		const farRise = 0.85 // metres, the height the first tilted board gave
+		if s := farRise / (2 * hinge * vrBoardScale); s < 1 {
+			if lim := float32(math.Asin(float64(s)) * 180 / math.Pi); lim < deg {
+				deg = lim
+			}
+		}
+	}
+	tilt := mgl32.Translate3D(0, 0, hinge).
+		Mul4(mgl32.HomogRotate3DX(mgl32.DegToRad(deg))).
+		Mul4(mgl32.Translate3D(0, 0, -hinge))
+	a.tilt = tilt
+	a.board = a.tableWorld.Mul4(tilt)
+	a.boardInv = a.board.Inv()
+	a.placedBoard = bd
+	near := a.board.Mul4x1(mgl32.Vec4{0, 0, hinge, 1}).Y()
+	centre := a.board.Mul4x1(mgl32.Vec4{0, 0, 0, 1}).Y()
+	far := a.board.Mul4x1(mgl32.Vec4{0, 0, -hinge, 1}).Y()
+	log.Printf("board %.2fx%.2f: tilt %.1f deg, felt near %.2f m, centre %.2f m, far %.2f m (table top %.2f m)",
+		bd.W, bd.H, deg, near, centre, far, vrBoardY-0.10*vrBoardScale)
 }
 
 // boardRay converts a world-space ray into board space.
