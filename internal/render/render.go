@@ -631,7 +631,9 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g 
 		// horizontal axis across its travel. Beads differ only by a phase
 		// offset, so the grain reads as one surface rolling forward instead
 		// of every bead spinning in its own direction.
-		roll := rotAxis(side, bd.S/game.BallR+ballPhase(bd.ID))
+		// Negative: the bead's surface must travel with the chain, so the
+		// sphere turns the other way about the axis across its travel.
+		roll := rotAxis(side, ballPhase(bd.ID)-bd.S/game.BallR)
 		r.meshProg.Mat3(r.uBallRot, roll)
 		r.meshProg.Float(r.uBall, 1)
 		r.meshProg.Float(r.uGloss, 0.0)
