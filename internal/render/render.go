@@ -465,8 +465,9 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 
 	// Balls in the air.
 	for _, sh := range g.Shots {
+		// The shot lives in 3D: draw it at its real height, not on the board.
 		model := world.
-			Mul4(mgl32.Translate3D(sh.Pos.X(), game.BallR, sh.Pos.Y())).
+			Mul4(mgl32.Translate3D(sh.Pos.X(), sh.Pos.Y(), sh.Pos.Z())).
 			Mul4(mgl32.Scale3D(game.BallR, game.BallR, game.BallR))
 		c := ballColor(sh.Color)
 		r.meshProg.Mat4(r.uModel, model)

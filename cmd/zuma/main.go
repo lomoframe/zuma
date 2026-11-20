@@ -476,55 +476,31 @@ func (a *app) updateVRAim(now float64) {
 			dev, info.Type, info.TrackingSystem, info.Serial, info.RenderModel)
 	}
 
-	m, poseOK := vr.ControllerAim(int(dev))
-	if !poseOK {
-		if hm, hok := vr.Pose(0); hok {
-			m = hm
-			poseOK = true
-			a.aimNote = "head-fallback"
-		}
-	}
+	// Aim from the grip pose with the calibrated local direction: 30 degrees
+	// from -Z (blue) toward -Y (green), which is where the physical tip is on
+	// the Quest 2 Touch controllers this project runs on.
+	pose, poseOK := vr.Pose(int(dev))
 	if poseOK {
-		o := mgl32.Vec3{m[12], m[13], m[14]}
-		d := mgl32.Vec3{-m[8], -m[9], -m[10]}
-		if d.Len() > 0.5 {
+		local := mgl32.Vec3{0, -0.5, -0.8660254}
+		w := pose.Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
+		d := mgl32.Vec3{w[0], w[1], w[2]}
+		if d.Len() > 1e-4 {
 			d = d.Normalize()
-			// The frame pads report the aim pose with the opposite Z axis.
-			// Calibrate that once over the first second of tracking instead of
-			// flipping frame by frame, which made the beam jump 180 degrees
-			// whenever the hand passed through horizontal.
-			if !a.aimFlipSet {
-				a.flipSum += d.Y()
-				a.flipN++
-				if a.flipN >= 30 {
-					avg := a.flipSum / float32(a.flipN)
-					a.aimFlip = avg > 0.1
-					a.aimFlipSet = true
-					log.Printf("aim calibration: avg dir.y=%.2f flipped=%v", avg, a.aimFlip)
-				}
-			}
-			if a.aimFlip {
-				d = d.Mul(-1)
-			}
+			o := mgl32.Vec3{pose[12], pose[13], pose[14]}.Add(d.Mul(0.07))
 			a.lastDev = int(dev)
-			if p, pok := vr.Pose(int(dev)); pok {
-				a.handPose = p
-				a.handPoseOK = true
-			} else {
-				a.handPoseOK = false
-			}
+			a.handPose = pose
+			a.handPoseOK = true
 			a.aimO, a.aimD = a.boardRay(o, d)
-			a.aimD = pressForward(a.aimD, aimTiltDeg)
-			// Light smoothing removes hand tremor without visible lag.
 			if a.aimSmoothOK {
 				a.aimD = a.aimSmooth.Mul(0.6).Add(a.aimD.Mul(0.4)).Normalize()
 			}
 			a.aimSmooth = a.aimD
 			a.aimSmoothOK = true
 			a.aimOK = true
-		} else {
-			a.aimNote = "bad-dir"
 		}
+	} else {
+		a.handPoseOK = false
+		a.aimNote = "no-device-pose"
 	}
 
 	if st.Trigger && !a.prevTrig {
