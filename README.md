@@ -2,8 +2,8 @@
 
 A small, self-contained Zuma-style marble shooter that runs as a desktop window
 and in SteamVR. A chain of coloured beads rolls along a spiral groove towards a
-hole; the stone frog in the middle shoots beads into the chain, and runs of
-three or more pop. Clear every bead to advance a level. Let the head of the
+hole. You are the launcher: beads fly out of your controller along its aiming
+ray, and runs of three or more pop. Clear every bead to advance a level. Let the head of the
 chain reach the hole and the round is over.
 
 ![The board](docs/hero.png)
@@ -20,8 +20,9 @@ single executable with no asset files.
   swallowed by the hole.
 - Six saturated bead colours; level 1 starts with four and later levels add the
   rest, along with more beads and a faster chain.
-- Tabletop 3D presentation: a wooden table, felt board, lit groove, a frog
-  turret with the loaded and next bead, an entry mouth and a stone hole.
+- Tabletop 3D presentation: a wooden table, felt board, a lit groove, an entry
+  mouth and a stone hole. The loaded bead floats at your controller, the spare
+  just below it, and a cyan laser marks where the shot will land.
 - VR: the board sits on a table in front of the player; aim with the right
   controller and fire with the trigger. The desktop window mirrors the left eye.
 - Desktop: orbit-fixed three-quarter view, the mouse aims on the board plane,
@@ -38,6 +39,7 @@ single executable with no asset files.
 | --- | --- | --- |
 | Aim | Move the mouse over the board | Point the right controller at the board |
 | Fire | Left click (or `Space`) | Right trigger |
+| Laser | follows the cursor ray | cyan beam from the controller |
 | Restart | `R` | Right trigger on the game-over screen |
 | Quit | `Esc` | SteamVR menu / quit |
 
