@@ -1,0 +1,8 @@
+SourceHanSansCN-Signs.otf is a glyph subset of Source Han Sans CN
+(c) 2014-2021 Adobe (https://github.com/adobe-fonts/source-han-sans),
+licensed under the SIL Open Font License, Version 1.1
+(https://scripts.sil.org/OFL).
+
+The subset keeps only the characters used by the in-game signboards plus basic
+Latin and digits. Regenerate it with `make font` (needs python3-fonttools) after
+changing any sign text.
