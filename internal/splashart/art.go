@@ -255,81 +255,115 @@ func shade(px, py float64) (col, float64) {
 		}
 	}
 
-	// -- the stone frog idol sits above the spiral's inner end, so the chain
-	// wraps under it and disappears into the drain at its feet.
-	ell := func(cx, cy, rx, ry float64) float64 {
-		return math.Hypot((px-cx)/rx, (py-cy)/ry)
+	// -- the stone dragon head in profile at the centre of the spiral: long
+	// snout to the left, jaw open over the drain, horn and mane sweeping back.
+	ellRot := func(cx, cy, rx, ry, ang float64) float64 {
+		dx, dy := px-cx, py-cy
+		ca, sa := math.Cos(ang), math.Sin(ang)
+		return math.Hypot((dx*ca+dy*sa)/rx, (-dx*sa+dy*ca)/ry)
 	}
-	if r < 120 {
-		c = c.add(gold.mul(0.30 * math.Pow(clamp01(1-r/120), 2.0)))
+	segWidth := func(x0, y0, x1, y1, w0, w1 float64) float64 {
+		vx, vy := x1-x0, y1-y0
+		l2 := vx*vx + vy*vy
+		t := 0.0
+		if l2 > 0 {
+			t = clamp01(((px-x0)*vx + (py-y0)*vy) / l2)
+		}
+		return math.Hypot(px-(x0+t*vx), py-(y0+t*vy)) - (w0 + (w1-w0)*t)
 	}
-	body := ell(CenterX, CenterY+12, 54, 35)
-	head := ell(CenterX, CenterY-24, 37, 27)
-	legL := ell(CenterX-44, CenterY+32, 21, 15)
-	legR := ell(CenterX+44, CenterY+32, 21, 15)
-	if body < 1 || head < 1 || legL < 1 || legR < 1 {
-		n := valueNoise(px/6, py/6)
-		c = mix(col{0.052, 0.130, 0.112}, col{0.086, 0.205, 0.168}, 0.45+0.55*n)
-		if py < CenterY+8 {
+	// The head is drawn in local units and scaled up so it holds its own
+	// against the beads around it.
+	lx := CenterX + (px-CenterX)/1.24
+	ly := (CenterY + 12) + (py-(CenterY+12))/1.24
+	if d := math.Hypot(lx-CenterX, ly-CenterY); d < 150 {
+		c = c.add(gold.mul(0.34 * math.Pow(clamp01(1-d/150), 2.0)))
+	}
+
+	// mane: spikes fanning off the back of the skull.
+	for i := 0; i < 5; i++ {
+		a := -1.05 + float64(i)*0.44
+		x0 := CenterX + 44 + 6*math.Cos(a)
+		y0 := CenterY - 20 + 12*math.Sin(a)
+		x1 := x0 + 40*math.Cos(a)
+		y1 := y0 + 40*math.Sin(a)
+		if segWidth(x0, y0, x1, y1, 9, 2) < 0 {
+			c = mix(c, col{0.042, 0.120, 0.098}.mul(0.85+0.4*valueNoise(lx/6, ly/6)), 1)
+		}
+	}
+
+	// horns: one long primary sweeping back, one short secondary under it.
+	if segWidth(CenterX+28, CenterY-48, CenterX+62, CenterY-80, 11, 6) < 0 ||
+		segWidth(CenterX+62, CenterY-80, CenterX+90, CenterY-92, 6, 1.5) < 0 {
+		c = mix(c, col{0.250, 0.235, 0.185}.mul(0.85+0.30*valueNoise(lx/4, ly/4)), 1)
+	}
+	if segWidth(CenterX+40, CenterY-26, CenterX+76, CenterY-42, 7.5, 3) < 0 {
+		c = mix(c, col{0.200, 0.190, 0.150}.mul(0.9+0.25*valueNoise(lx/5, ly/5)), 1)
+	}
+
+	// skull and long snout.
+	skull := math.Hypot((lx-CenterX-16)/44, (ly-(CenterY-18))/36)
+	snout := segWidth(CenterX+20, CenterY-4, CenterX-62, CenterY+4, 34, 15)
+	if skull < 1 || snout < 0 {
+		n := valueNoise(lx/6, ly/6)
+		c = mix(col{0.066, 0.162, 0.133}, col{0.120, 0.262, 0.211}, 0.45+0.55*n)
+		if ly < CenterY-24 {
 			c = c.add(leafRim.mul(0.30))
 		}
-		if body > 0.95 || head > 0.95 {
-			c = c.add(goldDeep.mul(0.30))
+	}
+
+	// brow over the eye.
+	if ellRot(CenterX+16, CenterY-44, 22, 8, -0.22) < 1 {
+		c = mix(c, col{0.038, 0.100, 0.084}, 1)
+		c = c.add(goldDeep.mul(0.22))
+	}
+	// eye: gold almond with a slit pupil.
+	if ellRot(CenterX+18, CenterY-30, 12, 9, -0.16) < 1 {
+		c = mix(c, gold.mul(0.92), 1)
+	}
+	if ellRot(CenterX+18, CenterY-30, 3.2, 7.4, 0) < 1 {
+		c = mix(c, ink.mul(1.2), 1)
+	}
+	if math.Hypot(lx-(CenterX+15), ly-(CenterY-33)) < 1.5 {
+		c = mix(c, col{1, 0.98, 0.88}, 1)
+	}
+	// nostril at the snout tip.
+	if ellRot(CenterX-52, CenterY-4, 5.0, 4.0, 0) < 1 {
+		c = mix(c, ink.mul(1.35), 0.95)
+	}
+
+	// open maw between the jaws, over the drain.
+	if segWidth(CenterX-2, CenterY+16, CenterX-48, CenterY+14, 9, 4) < 0 {
+		c = mix(c, col{0.006, 0.010, 0.012}, 1)
+	}
+	// upper lip line and fangs.
+	if segWidth(CenterX+16, CenterY+10, CenterX-50, CenterY+8, 3.0, 2.0) < 0 {
+		c = mix(c, col{0.075, 0.180, 0.150}, 1)
+	}
+	for _, tx := range []float64{-40, -26, -12} {
+		if segWidth(CenterX+tx, CenterY+14, CenterX+tx-1, CenterY+26, 3.2, 0.7) < 0 {
+			c = mix(c, col{0.80, 0.78, 0.68}, 1)
 		}
 	}
-	// wide stone mouth between the head and the body.
-	if ell(CenterX, CenterY-8, 30, 7) < 1 {
-		c = mix(c, ink.mul(1.3), 0.95)
+	// lower jaw.
+	if segWidth(CenterX+10, CenterY+30, CenterX-46, CenterY+30, 9, 5) < 0 {
+		c = mix(c, col{0.045, 0.115, 0.096}, 1)
+		c = c.add(goldDeep.mul(0.14))
 	}
-	// nostrils.
-	for _, nx := range []float64{-7, 7} {
-		if math.Hypot(px-(CenterX+nx), py-(CenterY-40)) < 2 {
-			c = mix(c, ink.mul(1.4), 1)
-		}
+
+	// whisker curling off the snout, plus a beard tuft under the jaw.
+	if segWidth(CenterX-56, CenterY+6, CenterX-82, CenterY+20, 2.6, 1.8) < 0 ||
+		segWidth(CenterX-82, CenterY+20, CenterX-96, CenterY+40, 1.8, 1.0) < 0 {
+		c = mix(c, gold.mul(0.60), 0.85)
 	}
-	// eyes on top of the head.
-	for _, e := range []struct{ dx, dy float64 }{{-21, -56}, {21, -56}} {
-		ed := math.Hypot(px-(CenterX+e.dx), py-(CenterY+e.dy))
-		if ed < 12 {
-			c = mix(c, col{0.070, 0.185, 0.160}, 1)
-			c = c.add(goldDeep.mul(0.25 * smooth(12, 8, ed)))
-		}
-		if ed < 7.5 {
-			c = mix(c, gold.mul(0.92), 1)
-		}
-		if ed < 3.2 {
-			c = mix(c, ink.mul(1.2), 1)
+	for _, bx := range []float64{-34, -22} {
+		if segWidth(CenterX+bx, CenterY+34, CenterX+bx-4, CenterY+48, 3.4, 0.8) < 0 {
+			c = mix(c, col{0.30, 0.28, 0.20}, 0.9)
 		}
 	}
-	// the drain the chain falls into, right at the inner end of the groove.
-	dxEnd, dyEnd := CenterX, CenterY+SpiralInner
-	if de := math.Hypot(px-dxEnd, py-dyEnd); de < 40 {
-		n := valueNoise(px/5, py/5)
-		switch {
-		case de < 27:
-			c = mix(c, col{0.004, 0.007, 0.009}, 1)
-			c = c.add(col{0.01, 0.02, 0.02}.mul(0.6 * n))
-		case de < 36:
-			c = mix(c, stone.mul(0.55).mul(0.9+0.3*n), smooth(27, 32, de))
-			if de > 34 {
-				c = c.add(goldDeep.mul(0.30))
-			}
-		}
-	}
-	// -- the entrance the chain pours out of, at the outer end of the groove.
-	ex0, ey0 := CenterX+SpiralOuter, CenterY
-	if e := math.Hypot(px-ex0, py-ey0); e < 36 {
-		n := valueNoise(px/5, py/5)
-		switch {
-		case e < 22:
-			c = mix(c, col{0.005, 0.009, 0.011}, 1)
-			c = c.add(col{0.012, 0.024, 0.024}.mul(0.5 * n))
-		case e < 32:
-			c = mix(c, stoneHi.mul(0.45).mul(0.9+0.3*n), smooth(22, 27, e))
-			if e > 30 {
-				c = c.add(gold.mul(0.22))
-			}
-		}
+
+	// forehead crest at the crown.
+	if math.Abs(lx-(CenterX+20))*1.1+math.Abs(ly-(CenterY-54)) < 7 {
+		c = mix(c, gold.mul(0.88), 1)
 	}
 
 	// -- carved studs around the ring.
