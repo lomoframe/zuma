@@ -46,6 +46,14 @@ start-up.
 *(Documentation shots are rendered by the same path with `-vrcam`, which poses
 the right hand and its beam.)*
 
+### Title screen
+
+The title page is a painted poster generated at build time, anchored in the room
+so it stays put when you look around. The bead chain runs along the same spiral
+as the art and drains into the hole at its inner end.
+
+![Title screen](docs/title.png)
+
 ## Controls
 
 | Action | Steam Frame (VR) | Desktop (development) |
@@ -221,6 +229,7 @@ changing any on-screen text.
   盘形与线路（每关同权重重抽、守门条件不变）、连击击退都不随关卡变化，所以
   第 7 关球数、第 5 关颜色、第 16 关链速到顶之后曲线是平的，后段难度更多来自
   随机盘面的运气（线路越短、越早被填满）。
+- 标题页是一张构建期生成的程序化海报，锚在房间里固定坐标；球链沿画里的螺旋跑进末端洞口。
 - 全部资源程序化生成（网格、凹槽、盘形、标题页海报、字体子集、音效），
   只有一个可执行文件。
 

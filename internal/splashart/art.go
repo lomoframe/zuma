@@ -102,6 +102,12 @@ func init() {
 	}
 }
 
+// drainX/drainY is the spiral's inner end: the hole the chain runs into.
+var drainX, drainY = func() (float64, float64) {
+	th := 2 * math.Pi * Turns
+	return CenterX + SpiralInner*math.Cos(th), CenterY + SpiralInner*math.Sin(th)
+}()
+
 // SpiralAt maps an arc length in pixels to a point on the painted groove. ok is
 // false once s runs past the inner end, which is where the beads get swallowed.
 func SpiralAt(s float32) (x, y float32, ok bool) {
@@ -267,7 +273,7 @@ func shade(px, py float64) (col, float64) {
 			c = c.add(goldDeep.mul(0.28))
 		}
 	}
-	if de := math.Hypot(px-CenterX, py-(CenterY+SpiralInner)); de < 40 {
+	if de := math.Hypot(px-drainX, py-drainY); de < 40 {
 		n := valueNoise(px/5, py/5)
 		switch {
 		case de < 27:
