@@ -1,104 +1,132 @@
 # Zuma VR (祖玛 VR)
 
-A small, self-contained Zuma-style marble shooter that runs as a desktop window
-and in SteamVR. A chain of coloured beads rolls along a spiral groove towards a
-hole. You are the launcher: beads fly out of your controller along its aiming
-ray, and runs of three or more pop. Clear every bead to advance a level. Let the head of the
-chain reach the hole and the round is over.
+A Zuma-style marble shooter built for **standalone VR on the Steam Frame** — it
+runs on the headset itself (ARM64 / SteamOS, one self-contained executable, no
+PC tether and no asset files) and also opens a desktop window on a PC for
+development.
 
-![The board](docs/hero.png)
+You are the launcher: beads leave your **right controller** along a 3D ballistic
+arc, a cyan beam shows where they will land, and runs of three or more pop.
+Clear the board to advance; let the head of the chain reach the hole and the
+round is over.
 
-Everything is procedural: meshes, the carved spiral, the frog, the HUD font
-subset and all sound effects are generated at start-up. The game ships as a
-single executable with no asset files.
+![Aiming from the right controller](docs/vr-hero.png)
 
-## Features
+Everything is procedural — meshes, the carved groove, the board shapes, the
+title-screen poster, the HUD font subset and all sound effects are generated at
+start-up.
 
-- Classic single-path Zuma loop: spiral track, chain that feeds in at the tail,
-  insert-on-hit, three-of-a-kind pops, falling score with combo multipliers,
-  chain reactions when a cleared gap closes, and a lose state when the chain is
-  swallowed by the hole.
-- Six saturated bead colours; level 1 starts with four and later levels add the
-  rest, along with more beads and a faster chain.
-- Tabletop 3D presentation: a wooden table, felt board, a lit groove, an entry
-  mouth and a stone hole. The loaded bead floats at your controller, the spare
-  just below it, and a cyan laser marks where the shot will land.
-- VR: the board sits on a table in front of the player; aim with the right
-  controller and fire with the trigger. The desktop window mirrors the left eye.
-- Desktop: orbit-fixed three-quarter view, the mouse aims on the board plane,
-  left click fires, `R` restarts.
-- Procedural audio: shot, insert, pop, combo, win, lose.
+## Built for the Steam Frame
 
-| Win | Lose |
-| --- | --- |
-| ![Win](docs/win.png) | ![Lose](docs/lose.png) |
+- **Standalone**: `make frame` cross-compiles `bin/zuma-frame` for ARM64
+  SteamOS; copy that one file to the headset and it runs there, rendering
+  1728×1728 per eye with 4× MSAA at ~120 fps.
+- **Hand-tracked aiming**: the launcher sits in the right hand; aim by pointing
+  the controller, fire with the trigger. The ball is a real projectile with
+  gravity, not a raycast hit.
+- **Room-scale presentation**: the board stands on a table in front of you,
+  tilted back 20° like a pinball playfield; the title screen is anchored at a
+  fixed spot in the room, so looking around moves the view past it instead of
+  dragging it along.
+- The desktop window is the development/mirror view of the left eye.
+
+### Screenshots
+
+| In play | Win | Lose |
+| --- | --- | --- |
+| ![Aim](docs/vr-hero.png) | ![Win](docs/vr-win.png) | ![Lose](docs/vr-lose.png) |
+
+*(Documentation shots are rendered by the same path with `-vrcam`, which poses
+the right hand and its beam.)*
 
 ## Controls
 
-| Action | Desktop | VR |
+| Action | Steam Frame (VR) | Desktop (development) |
 | --- | --- | --- |
-| Aim | Move the mouse over the board | Point the right controller at the board |
-| Fire | Left click (or `Space`) | Right trigger |
-| Laser | follows the cursor ray | cyan beam from the controller |
-| Restart | `R` | Right trigger on the game-over screen |
-| Quit | `Esc` | SteamVR menu / quit |
+| Start from the title screen | Right trigger | `Space` / left click |
+| Aim | Point the right controller | Move the mouse over the board |
+| Fire | Right trigger | Left click / `Space` |
+| Restart after a loss | Right trigger | `R` |
+| Quit | SteamVR menu | `Esc` |
 
-The frog's mouth holds the loaded bead; the spare (next) bead waits on the board
-beside it.
+The loaded bead rides at the controller; there is no reticle at the end of the
+beam on purpose — the beam itself stops on the bead it will hit.
+
+## Rules
+
+- The chain runs along one generated route: a single-line spiral, up to two
+  nested rings, a maze or arc switchback, a wavy hairpin, a square spiral, or a
+  one-stroke silhouette (heart-free outlines such as star, apple, pentagon,
+  eye, cup). Board shapes, route family, direction and rotation are re-rolled
+  every level; a guard rail rejects layouts whose non-adjacent sections come
+  closer than one bead, that leave the felt, or that are too short.
+- A shot inserts on the side it struck; three or more touching beads of one
+  colour pop. Points are `10 × beads × combo`.
+- **Combo is per shot**: every extra pop caused by the same shot raises it. The
+  chain recoils away from the hole from x2 onwards, harder with every level,
+  and the impulse only lands when the two halves actually meet again.
+- Gaps close from the **front** section (the side nearer the hole), so a clear
+  can pull the next beads into a new match — chain reactions come from there.
+- The launcher only hands you colours that are **still on the chain**; a colour
+  that has been cleared completely is not dealt until it spawns again.
+- Losing: the chain's head reaches the hole. Winning: board and queue empty.
 
 ## Build and run
 
-Dependencies (Arch names): `glfw`, `glew`, `openal`, `openvr`, `go`.
+Dependencies (Arch names): `glfw`, `glew`, `openal`, `openvr`, `go`. For the
+headset build you also need the aarch64 cross toolchain and a user sysroot
+(`SYS_ARM64`, default `~/.local/aarch64-sysroot`; same setup as the author's
+`govr`).
+
+### Steam Frame (the target platform)
 
 ```sh
-make desktop      # windowed build and run
-make run          # same binary, VR when a headset is attached
-make test         # unit tests (rules, meshes, text, aiming)
-make shot         # refresh docs/hero.png
+make frame                                   # -> bin/zuma-frame (ARM64)
+scp bin/zuma-frame frame:Games/zuma/         # `frame` = ssh alias of the headset
+ssh frame 'cd ~/Games/zuma && DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/1000 \
+           setsid nohup ./zuma-frame -vr-debug >run.log 2>&1 </dev/null &'
 ```
 
-`-desktop` forces the flat view even with a headset connected. `-vr=false`
-disables SteamVR entirely. `-screenshot out.png -frames N` renders on a fixed
-clock and exits, which is how the images above are produced; `-demo won|lost`
-puts the round in a finished state for those shots.
+The log prints `VR active: 1728x1728 per eye, msaa 4x`, a per-level
+`board …: tilt …, felt near/centre/far …` line, and a once-a-second pose line.
 
-### Steam Frame / ARM64
+### PC (development / mirror)
 
-`make frame` cross-compiles `bin/zuma-frame` for ARM64 SteamOS using
-`scripts/frame-env.sh` and a user sysroot (`SYS_ARM64`, default
-`~/.local/aarch64-sysroot`) that carries libGL, GLEW, OpenAL, OpenVR and the X11
-libraries GLFW links against. That is the same sysroot setup used by `govr`.
+```sh
+make desktop     # windowed view, mouse aims on the board
+make run         # same binary, VR when a headset is attached
+make test        # unit tests (rules, routes, meshes, text, aiming)
+make shot        # refresh the documentation screenshots
+```
 
-## How it plays
+## Flags
 
-- The chain enters at the outer end of a 1.9-turn spiral and rolls inwards. Its
-  head is the bead closest to the hole.
-- A shot that hits a bead is inserted on the side it struck. The tail behind the
-  insertion recoils one bead; the renderer eases that shift.
-- Three or more touching beads of one colour pop. Points are `10 × beads ×
-  combo`; the combo window is 4.5 s and a second match inside it multiplies.
-- After a pop the rear section catches up at triple speed. If the two sides meet
-  with the same colour, the junction is checked again, which is where chain
-  reactions come from.
-- A level ends when the queue and the board are empty. The next level adds five
-  beads, raises the speed and eventually unlocks more colours.
-- If the head reaches the hole, the chain is sucked in and the run ends; the
-  trigger or `R` starts again at level 1.
+| Flag | Meaning |
+| --- | --- |
+| `-desktop` | Force the flat window view even with a headset connected |
+| `-vr=false` | Do not touch SteamVR at all |
+| `-title=false` | Skip the title screen and drop straight into level 1 |
+| `-screenshot out.png -frames N` | Render on a fixed clock, write one frame, exit |
+| `-demo won\|lost` | Put the round in a finished state for screenshots |
+| `-seed N` | Reproduce a particular layout |
+| `-vrcam` | Documentation framing: pose the right hand and its beam |
+| `-controller-model` | Draw the OpenVR controller mesh (off by default: the 10k-vertex Quest 2 mesh crashes zink on the Frame) |
 
 ## Layout
 
 ```
-cmd/zuma        window, input, VR presentation, screenshots
-internal/game   pure rules: spiral path, chain, shots, matches, scoring
-internal/render shaders, procedural meshes, bead/frog/board drawing, HUD text
-internal/font   ~14 KB Source Han Sans CN subset and a rasteriser
-internal/audio  OpenAL glue plus synthesised Zuma clips
-internal/gl     thin cgo bindings to the GL 4.1 calls used here
-internal/vr     cgo wrapper around the SteamVR/OpenVR runtime
+cmd/zuma         window, input, VR presentation, screenshots
+internal/game    pure rules: routes, board shapes, chain, shots, matches, scoring
+internal/render  shaders, procedural meshes, board/table/bead drawing, HUD text
+internal/splashart  the painted title-screen art (embedded as PNG)
+internal/font    Source Han Sans CN subset and a rasteriser
+internal/audio   OpenAL glue plus synthesised clips
+internal/gl      thin cgo bindings to the GL 4.1 calls used here
+internal/vr      cgo wrapper around the SteamVR/OpenVR runtime
 ```
 
 `internal/gl` and `internal/vr` are the small cgo glue packages shared with the
-author's `govr` project; they are vendored here so the game builds on its own.
+author's `govr` project; they are vendored so the game builds on its own.
 
 The HUD font is a glyph subset of Source Han Sans CN (SIL OFL 1.1, see
 `internal/font/LICENSE-SourceHanSans.txt`). Regenerate it with `make font` after
@@ -108,17 +136,24 @@ changing any on-screen text.
 
 ## 中文说明
 
-一个自包含的祖玛式弹珠游戏，既能开桌面窗口，也能在 SteamVR 里玩：球链沿着
-螺旋凹槽滚向洞口，中间的石青蛙把彩球射进链条，同色三颗以上消除；清空全部
-球过关，球头滚进洞里则本局结束。
+一个为 **Steam Frame 一体机**做的祖玛式弹珠游戏：编译出的单个 ARM64 可执行文件
+直接跑在头显里（SteamOS，无需连电脑、没有资源文件），同时也能在 PC 上开一个
+桌面窗口用于开发调试。
 
-- 立体桌面视角：木桌、毡面棋盘、带凸边的高光凹槽、青蛙炮台（含待发球与备用
-  球）、入球口与带红眼的石洞。
-- VR：棋盘摆在你面前的桌上，用右手手柄指向棋盘瞄准、扣扳机发射；桌面窗口同步
-  显示左眼画面。
-- 桌面：鼠标在棋盘平面上瞄准，左键发射，`R` 重开，`Esc` 退出。
-- 全部资源程序化生成（网格、凹槽、青蛙、字体子集、音效），只有一个可执行文件。
+你就是炮台：彩球从**右手柄**沿 3D 弹道射出，青色射线标出落点，同色三颗以上消除。
+清空盘面过关，球链头部滚进洞口则本局结束。
 
-构建：`make desktop`（窗口）/ `make run`（有头显即进 VR）/ `make test`。
-头显用的是 SteamVR，`-desktop` 可强制桌面模式。给 Steam Frame 交叉编译用
-`make frame`。
+- **一体机**：`make frame` 交叉编译 `bin/zuma-frame`，拷到头显就能跑；每眼
+  1728×1728、4× MSAA、约 120 fps。
+- **手柄操作**：待发的球握在右手，指向即瞄准，扣扳机发射（真弹道，带重力）；
+  射线末端不画准星——射线停在哪颗球上就插在哪。
+- **场景**：盘面立在面前的桌上，像弹球台一样后仰 20°；标题页固定在房间里某个
+  坐标，转头不会拖着它走。桌面窗口只是左眼的调试镜像。
+- 规则：线路/盘形每关随机（单线螺旋、最多两层环、迷宫/圆弧发卡、波浪发卡、
+  方形螺旋、一笔画轮廓），洞口位置随机；插入按命中侧、三消、**连击按每发计**、
+  缺口由靠洞口一侧回退合拢、击退随连击级别加重；手上只发链上还有的颜色。
+- 全部资源程序化生成（网格、凹槽、盘形、标题页海报、字体子集、音效），
+  只有一个可执行文件。
+
+构建：`make desktop`（窗口）/ `make run`（有头显即进 VR）/ `make frame`（头显
+ARM64）/ `make test`。仓库：[github.com/lomoalbert/zumaframe](https://github.com/lomoalbert/zumaframe)。

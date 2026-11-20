@@ -40,6 +40,7 @@ type app struct {
 	vrAimOK     bool
 	vrAim       mgl32.Vec2
 	vrDebug     bool
+	vrcam       bool // documentation framing
 	vrFrames    int
 	lastVRLog   float64
 	vrRetryAt   float64
@@ -103,6 +104,7 @@ func main() {
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
 	demo := flag.String("demo", "", "screenshot helper: \"won\" or \"lost\" shows the overlay")
+	vrcam := flag.Bool("vrcam", false, "dev: first-person VR framing for documentation shots")
 	title := flag.Bool("title", true, "show the title screen until the player presses start")
 	yaw := flag.Float64("yaw", 0, "desktop camera yaw in radians")
 	pitch := flag.Float64("pitch", 0.60, "desktop camera pitch in radians")
@@ -185,6 +187,10 @@ func main() {
 	}
 
 	a.vrDebug = *vrDebug
+	a.vrcam = *vrcam
+	if a.vrcam {
+		a.cam.dist = 4.6 // tighter documentation framing
+	}
 	a.msaa = int32(*msaa)
 	// Screenshots are a desktop feature: the compositor owns the headset.
 	canVR := *useVR && !*desktop && *shot == ""
@@ -529,6 +535,12 @@ func (a *app) updateMouseAim(win *glfw.Window) {
 	a.aimO = bo.Add(bd.Mul(0.55))
 	a.aimD = bd
 	a.aimOK = true
+	if a.vrcam {
+		// Documentation shot: the right hand holds the launcher over the near
+		// right of the table and its beam crosses the board.
+		a.aimO = mgl32.Vec3{1.05, 1.32, 0.35}
+		a.aimD = mgl32.Vec3{0.05, 1.05, -1.55}.Sub(a.aimO).Normalize()
+	}
 }
 
 // updateVRAim takes the right controller's aim pose as the shot ray. When no

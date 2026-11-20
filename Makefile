@@ -20,15 +20,16 @@ desktop: build
 	./$(BIN) -desktop
 
 # Screenshots run on a fixed clock, so the same flags always produce the same
-# frame. -fire=false keeps the shot in flight out of the reference images.
+# frame. -vrcam poses the right hand and its beam so the docs read as the VR
+# view rather than the flat development camera.
 shot: build
-	./$(BIN) -desktop -screenshot docs/hero.png -frames 1600 -fire=false -aim-x 0.15 -aim-y 1.3
+	./$(BIN) -desktop -screenshot docs/vr-hero.png -frames 700 -seed 9 -vrcam -title=false
 
 win: build
-	./$(BIN) -desktop -screenshot docs/win.png -frames 30 -demo won
+	./$(BIN) -desktop -screenshot docs/vr-win.png -frames 200 -seed 9 -vrcam -title=false -demo won
 
 lose: build
-	./$(BIN) -desktop -screenshot docs/lose.png -frames 30 -demo lost
+	./$(BIN) -desktop -screenshot docs/vr-lose.png -frames 200 -seed 9 -vrcam -title=false -demo lost
 
 # Steam Frame (ARM64 SteamOS). Needs an aarch64 toolchain and a user sysroot
 # holding libGL/libGLEW/libopenvr_api/libopenal plus the X11 libs glfw links
