@@ -28,41 +28,50 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn       bool
-	eyes       [2]*gl.RenderTarget
-	board      mgl32.Mat4
-	boardInv   mgl32.Mat4
-	prevTrig   bool
-	vrAimOK    bool
-	vrAim      mgl32.Vec2
-	vrDebug    bool
-	vrFrames   int
-	lastVRLog  float64
-	vrRetryAt  float64
-	vrFailLog  float64
-	aimNote    string
-	aimO       mgl32.Vec3
-	aimD       mgl32.Vec3
-	aimOK      bool
-	aimFlip    bool
-	aimFlipSet bool
-	msaa       int32
+	vrOn        bool
+	eyes        [2]*gl.RenderTarget
+	board       mgl32.Mat4
+	boardInv    mgl32.Mat4
+	prevTrig    bool
+	vrAimOK     bool
+	vrAim       mgl32.Vec2
+	vrDebug     bool
+	vrFrames    int
+	lastVRLog   float64
+	vrRetryAt   float64
+	vrFailLog   float64
+	aimNote     string
+	aimO        mgl32.Vec3
+	aimD        mgl32.Vec3
+	aimOK       bool
+	aimFlip     bool
+	aimFlipSet  bool
+	flipSum     float32
+	flipN       int
+	aimSmooth   mgl32.Vec3
+	aimSmoothOK bool
+	handPose    mgl32.Mat4
+	handPoseOK  bool
+	lastDev     int
+	modelState  int
+	msaa        int32
 }
 
 // aimTiltDeg presses the controller ray forward (down) so the player does not
 // have to angle the pad steeply at the table.
 const aimTiltDeg = 30
 
-// tiltForward rotates d toward -Y by deg degrees around the horizontal axis.
-func tiltForward(d mgl32.Vec3, deg float32) mgl32.Vec3 {
-	axis := d.Cross(mgl32.Vec3{0, 1, 0})
-	if axis.Len() < 1e-4 {
-		return d
-	}
-	axis = axis.Normalize()
-	r := mgl32.HomogRotate3D(mgl32.DegToRad(-deg), axis)
-	v := r.Mul4x1(mgl32.Vec4{d[0], d[1], d[2], 0})
-	return mgl32.Vec3{v[0], v[1], v[2]}.Normalize()
+// pressForward pitches a direction down by deg around the world X axis. A
+// world axis (rather than one derived from the direction) keeps the response
+// stable even when the controller points nearly straight up or down.
+func pressForward(d mgl32.Vec3, deg float32) mgl32.Vec3 {
+	th := mgl32.DegToRad(-deg)
+	c, sn := float32(math.Cos(float64(th))), float32(math.Sin(float64(th)))
+	return mgl32.Vec3{
+		d[0],
+		d[1]*c - d[2]*sn,
+		d[1]*sn + d[2]*c,
+	}.Normalize()
 }
 
 const (
@@ -81,6 +90,7 @@ func main() {
 	seed := flag.Int64("seed", 7, "random seed")
 	msaa := flag.Int("msaa", 4, "MSAA samples for the VR eye textures")
 	vrDebug := flag.Bool("vr-debug", false, "log head/controller/aim once per second")
+	ctrlModel := flag.Bool("controller-model", false, "draw SteamVR's controller mesh (may crash the zink driver on the frame)")
 	aimX := flag.Float64("aim-x", 0, "board-space aim point x used by -screenshot")
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
@@ -225,6 +235,18 @@ func main() {
 		a.g.Update(float32(dt))
 		a.playEvents()
 
+		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
+			m, state := vr.LoadRenderModel(a.lastDev)
+			switch state {
+			case 1:
+				a.r.SetControllerModel(m.Pos, m.Nrm, m.Idx, m.Name)
+				a.modelState = 2
+				log.Printf("controller model: %s (%d verts)", m.Name, len(m.Pos)/3)
+			case -1:
+				a.modelState = -1
+				log.Printf("controller model unavailable")
+			}
+		}
 		if a.vrOn {
 			a.renderEyes(now)
 			a.renderMirror(now)
@@ -332,7 +354,7 @@ func (a *app) renderDesktop(now float64) {
 	w, h := currentWindow.GetFramebufferSize()
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
-	a.r.Draw(vp, eye, mgl32.Ident4(), a.g, now, a.aimO, a.aimD, a.aimOK)
+	a.r.Draw(vp, eye, mgl32.Ident4(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
 func (a *app) renderMirror(now float64) {
@@ -348,7 +370,7 @@ func (a *app) renderMirror(now float64) {
 	gl.BindFramebuffer(0)
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
-	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK)
+	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
 func (a *app) renderEyes(now float64) {
@@ -368,7 +390,7 @@ func (a *app) renderEyes(now float64) {
 		rt.Bind()
 		gl.Viewport(0, 0, rt.W, rt.H)
 		clearScene()
-		a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK)
+		a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 		rt.Resolve()
 		gl.Flush()
 		rt.Unbind()
@@ -447,6 +469,12 @@ func (a *app) updateVRAim(now float64) {
 		a.logVR(now, st, ok, dev)
 		return
 	}
+	if a.lastDev != int(dev) {
+		a.lastDev = int(dev)
+		info := vr.DeviceInfoOf(int(dev))
+		log.Printf("controller %d: type=%q tracking=%q serial=%q model=%q",
+			dev, info.Type, info.TrackingSystem, info.Serial, info.RenderModel)
+	}
 
 	m, poseOK := vr.ControllerAim(int(dev))
 	if !poseOK {
@@ -461,15 +489,38 @@ func (a *app) updateVRAim(now float64) {
 		d := mgl32.Vec3{-m[8], -m[9], -m[10]}
 		if d.Len() > 0.5 {
 			d = d.Normalize()
-			// The frame controllers report the aim pose with the opposite Z
-			// direction. Gameplay always aims down at the table, so take the
-			// downward branch whichever way the driver reports it.
-			if d.Y() > -0.02 {
+			// The frame pads report the aim pose with the opposite Z axis.
+			// Calibrate that once over the first second of tracking instead of
+			// flipping frame by frame, which made the beam jump 180 degrees
+			// whenever the hand passed through horizontal.
+			if !a.aimFlipSet {
+				a.flipSum += d.Y()
+				a.flipN++
+				if a.flipN >= 30 {
+					avg := a.flipSum / float32(a.flipN)
+					a.aimFlip = avg > 0.1
+					a.aimFlipSet = true
+					log.Printf("aim calibration: avg dir.y=%.2f flipped=%v", avg, a.aimFlip)
+				}
+			}
+			if a.aimFlip {
 				d = d.Mul(-1)
-				a.aimNote = "flipped"
+			}
+			a.lastDev = int(dev)
+			if p, pok := vr.Pose(int(dev)); pok {
+				a.handPose = p
+				a.handPoseOK = true
+			} else {
+				a.handPoseOK = false
 			}
 			a.aimO, a.aimD = a.boardRay(o, d)
-			a.aimD = tiltForward(a.aimD, aimTiltDeg)
+			a.aimD = pressForward(a.aimD, aimTiltDeg)
+			// Light smoothing removes hand tremor without visible lag.
+			if a.aimSmoothOK {
+				a.aimD = a.aimSmooth.Mul(0.6).Add(a.aimD.Mul(0.4)).Normalize()
+			}
+			a.aimSmooth = a.aimD
+			a.aimSmoothOK = true
 			a.aimOK = true
 		} else {
 			a.aimNote = "bad-dir"
@@ -515,7 +566,11 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	if a.aimOK {
 		aim = fmt.Sprintf("o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", a.aimO[0], a.aimO[1], a.aimO[2], a.aimD[0], a.aimD[1], a.aimD[2])
 	}
-	log.Printf("vr head=%s dev=%d left=%v right=%v aim=%s trig=%.2f btn=%v frames=%d", hp, dev, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.vrFrames)
+	devO := "none"
+	if a.handPoseOK {
+		devO = fmt.Sprintf("(%.2f,%.2f,%.2f)", a.handPose[12], a.handPose[13], a.handPose[14])
+	}
+	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.vrFrames)
 	a.vrFrames = 0
 }
 

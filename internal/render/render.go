@@ -203,12 +203,14 @@ type Renderer struct {
 	uVP, uModel, uTint, uCam, uGloss, uUnlit int32
 	uMVP, uTex, uColor                       int32
 
-	board *Mesh
-	frog  *Mesh
-	ball  *Mesh
-	ring  *Mesh
-	beam  *Mesh
-	quad  *textQuad
+	board    *Mesh
+	frog     *Mesh
+	ball     *Mesh
+	ring     *Mesh
+	beam     *Mesh
+	hand     *Mesh
+	handName string
+	quad     *textQuad
 
 	texts map[string]*textTex
 }
@@ -386,7 +388,52 @@ func ballColor(i int) mgl32.Vec4 {
 
 // Draw renders one frame. vp is in world space; world maps board space into
 // the world (identity for the desktop camera).
-func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game.Game, now float64, aimO, aimD mgl32.Vec3, aimOK bool) {
+// SetControllerModel uploads SteamVR's own controller mesh, in metres in the
+// device's local space.
+func (r *Renderer) SetControllerModel(pos, nrm []float32, idx []uint16, name string) {
+	n := len(pos) / 3
+	if n == 0 || len(nrm) < n*3 || len(idx) == 0 {
+		return
+	}
+	b := &Builder{}
+	for i := 0; i < n; i++ {
+		b.verts = append(b.verts, Vertex{
+			Pos: mgl32.Vec3{pos[i*3], pos[i*3+1], pos[i*3+2]},
+			Nrm: mgl32.Vec3{nrm[i*3], nrm[i*3+1], nrm[i*3+2]},
+			Col: rgba(1, 1, 1, 1),
+		})
+	}
+	for _, i := range idx {
+		b.idx = append(b.idx, uint32(i))
+	}
+	r.hand = upload(b)
+	r.handName = name
+}
+
+// drawController draws SteamVR's controller model at the device pose plus the
+// device axes, so the physical pad can be compared with what the runtime says.
+func (r *Renderer) drawController(pose mgl32.Mat4) {
+	if r.hand != nil {
+		r.meshProg.Mat4(r.uModel, pose)
+		r.meshProg.Vec4(r.uTint, 0.62, 0.66, 0.74, 1)
+		r.meshProg.Float(r.uGloss, 0.30)
+		r.meshProg.Float(r.uUnlit, 0)
+		r.hand.draw()
+	}
+	o := mgl32.Vec3{pose[12], pose[13], pose[14]}
+	axes := [3]mgl32.Vec3{
+		{pose[0], pose[1], pose[2]},
+		{pose[4], pose[5], pose[6]},
+		{pose[8], pose[9], pose[10]},
+	}
+	cols := [3]mgl32.Vec4{rgba(1, 0.25, 0.25, 1), rgba(0.3, 1, 0.35, 1), rgba(0.35, 0.55, 1, 1)}
+	for i := 0; i < 3; i++ {
+		d := axes[i].Normalize()
+		r.drawBeamColored(mgl32.Ident4(), o, o.Add(d.Mul(0.09)), cols[i], 0.004)
+	}
+}
+
+func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game.Game, now float64, aimO, aimD mgl32.Vec3, aimOK bool, hand mgl32.Mat4, handOK bool) {
 	r.meshProg.Bind()
 	r.meshProg.Mat4(r.uVP, vp)
 	r.meshProg.Vec3(r.uCam, cam[0], cam[1], cam[2])
@@ -425,6 +472,10 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		r.meshProg.Mat4(r.uModel, model)
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
 		r.ball.draw()
+	}
+
+	if handOK {
+		r.drawController(hand)
 	}
 
 	// The player is the launcher: a beam leaves the controller and a bead
@@ -518,6 +569,10 @@ func (r *Renderer) drawHand(world mgl32.Mat4, g *game.Game, o, d mgl32.Vec3, now
 
 // drawBeam stretches the unit beam between two board-space points.
 func (r *Renderer) drawBeam(world mgl32.Mat4, from, to mgl32.Vec3) {
+	r.drawBeamColored(world, from, to, rgba(0.40, 0.95, 1.0, 0.95), 0.006)
+}
+
+func (r *Renderer) drawBeamColored(world mgl32.Mat4, from, to mgl32.Vec3, col mgl32.Vec4, radius float32) {
 	d := to.Sub(from)
 	l := d.Len()
 	if l < 1e-4 {
@@ -537,9 +592,9 @@ func (r *Renderer) drawBeam(world mgl32.Mat4, from, to mgl32.Vec3) {
 		z.X(), z.Y(), z.Z(), 0,
 		c.X(), c.Y(), c.Z(), 1,
 	}
-	model := world.Mul4(m).Mul4(mgl32.Scale3D(0.006, 0.006, l))
+	model := world.Mul4(m).Mul4(mgl32.Scale3D(radius, radius, l))
 	r.meshProg.Mat4(r.uModel, model)
-	r.meshProg.Vec4(r.uTint, 0.40, 0.95, 1.0, 0.95)
+	r.meshProg.Vec4(r.uTint, col[0], col[1], col[2], col[3])
 	r.meshProg.Float(r.uGloss, 0)
 	r.meshProg.Float(r.uUnlit, 1)
 	r.beam.draw()

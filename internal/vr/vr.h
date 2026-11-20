@@ -37,6 +37,11 @@ int govr_vr_wait_poses(void);
 /* Fills out12 with the row-major device-to-standing matrix. Returns 0 when the
  * pose is not valid this frame. */
 int govr_vr_pose(int device, float *out12);
+int govr_vr_model_name(unsigned int device, char *out, int outlen);
+int govr_vr_device_info(unsigned int device, char *typ, int typlen, char *track, int tracklen,
+                        char *serial, int seriallen, char *model, int modellen);
+int govr_vr_model_load(unsigned int device, float *pos, float *nrm, unsigned short *idx,
+                       int maxVerts, int maxIdx, int *nv, int *ni, char *name, int namelen);
 
 int govr_vr_submit(int eye, unsigned int texture);
 

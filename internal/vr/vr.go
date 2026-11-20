@@ -232,6 +232,76 @@ func ControllerAxes(device uint32) ([5][2]float32, bool) {
 	return axes, true
 }
 
+// DeviceInfo is what SteamVR reports about a tracked device.
+type DeviceInfo struct {
+	Type           string
+	TrackingSystem string
+	Serial         string
+	RenderModel    string
+}
+
+func cstr(b []byte) string {
+	for i, c := range b {
+		if c == 0 {
+			return string(b[:i])
+		}
+	}
+	return string(b)
+}
+
+// DeviceInfoOf reads the device description fields.
+func DeviceInfoOf(dev int) DeviceInfo {
+	typ := make([]byte, 128)
+	trk := make([]byte, 128)
+	ser := make([]byte, 128)
+	mod := make([]byte, 256)
+	C.govr_vr_device_info(C.uint(dev),
+		(*C.char)(unsafe.Pointer(&typ[0])), C.int(len(typ)),
+		(*C.char)(unsafe.Pointer(&trk[0])), C.int(len(trk)),
+		(*C.char)(unsafe.Pointer(&ser[0])), C.int(len(ser)),
+		(*C.char)(unsafe.Pointer(&mod[0])), C.int(len(mod)))
+	return DeviceInfo{Type: cstr(typ), TrackingSystem: cstr(trk), Serial: cstr(ser), RenderModel: cstr(mod)}
+}
+
+// RenderModel is a controller mesh from SteamVR's IVRRenderModels.
+type RenderModel struct {
+	Name string
+	Pos  []float32
+	Nrm  []float32
+	Idx  []uint16
+}
+
+// LoadRenderModel polls SteamVR's model loader: 1 = ready, 0 = still loading,
+// -1 = failed. The mesh is in the controller's local space, already in metres.
+func LoadRenderModel(dev int) (*RenderModel, int) {
+	const maxVerts = 20000
+	const maxIdx = 60000
+	pos := make([]float32, maxVerts*3)
+	nrm := make([]float32, maxVerts*3)
+	idx := make([]uint16, maxIdx)
+	var nv, ni C.int
+	name := make([]byte, 256)
+	state := int(C.govr_vr_model_load(C.uint(dev),
+		(*C.float)(unsafe.Pointer(&pos[0])),
+		(*C.float)(unsafe.Pointer(&nrm[0])),
+		(*C.ushort)(unsafe.Pointer(&idx[0])),
+		C.int(maxVerts), C.int(maxIdx), &nv, &ni,
+		(*C.char)(unsafe.Pointer(&name[0])), C.int(len(name))))
+	if state != 1 {
+		return nil, state
+	}
+	end := 0
+	for end < len(name) && name[end] != 0 {
+		end++
+	}
+	return &RenderModel{
+		Name: string(name[:end]),
+		Pos:  pos[:int(nv)*3],
+		Nrm:  nrm[:int(nv)*3],
+		Idx:  idx[:int(ni)],
+	}, 1
+}
+
 // ControllerDevices lists every tracked device SteamVR classifies as a
 // controller, independent of the left/right role assignment.
 func ControllerDevices() []int {

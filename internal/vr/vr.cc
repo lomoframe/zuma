@@ -12,6 +12,7 @@ namespace {
 
 vr::IVRSystem *g_sys = nullptr;
 vr::IVRCompositor *g_comp = nullptr;
+vr::IVRRenderModels *g_models = nullptr;
 vr::TrackedDevicePose_t g_poses[vr::k_unMaxTrackedDeviceCount];
 
 // Action handles from the app manifest. Once an app loads a manifest SteamVR
@@ -73,6 +74,7 @@ int govr_vr_init(char *err, int errlen) {
         return 2;
     }
 
+    g_models = vr::VRRenderModels();
     g_comp = vr::VRCompositor();
     if (g_comp == nullptr) {
         snprintf(err, static_cast<size_t>(errlen), "compositor unavailable");
@@ -82,6 +84,92 @@ int govr_vr_init(char *err, int errlen) {
     g_comp->SetTrackingSpace(vr::TrackingUniverseStanding);
     memset(g_poses, 0, sizeof(g_poses));
     return 0;
+}
+
+// govr_vr_device_info reports what SteamVR thinks the device is, which is the
+// quickest way to see whether the runtime has real data for it.
+int govr_vr_device_info(unsigned int device, char *typ, int typlen, char *track, int tracklen,
+                        char *serial, int seriallen, char *model, int modellen) {
+    if (g_sys == nullptr || device >= vr::k_unMaxTrackedDeviceCount) {
+        return -1;
+    }
+    vr::ETrackedPropertyError e = vr::TrackedProp_Success;
+    auto get = [&](vr::ETrackedDeviceProperty prop, char *buf, int len) {
+        if (buf == nullptr || len <= 0) {
+            return;
+        }
+        buf[0] = '\0';
+        g_sys->GetStringTrackedDeviceProperty(static_cast<vr::TrackedDeviceIndex_t>(device),
+                                              prop, buf, static_cast<uint32_t>(len), &e);
+    };
+    get(vr::Prop_ControllerType_String, typ, typlen);
+    get(vr::Prop_TrackingSystemName_String, track, tracklen);
+    get(vr::Prop_SerialNumber_String, serial, seriallen);
+    get(vr::Prop_RenderModelName_String, model, modellen);
+    return 0;
+}
+
+// govr_vr_model_name reads the controller's SteamVR render-model name.
+int govr_vr_model_name(unsigned int device, char *out, int outlen) {
+    if (g_sys == nullptr || out == nullptr || outlen <= 0 ||
+        device >= vr::k_unMaxTrackedDeviceCount) {
+        return -1;
+    }
+    vr::ETrackedPropertyError perr = vr::TrackedProp_Success;
+    uint32_t n = g_sys->GetStringTrackedDeviceProperty(
+        static_cast<vr::TrackedDeviceIndex_t>(device),
+        vr::Prop_RenderModelName_String, out, static_cast<uint32_t>(outlen), &perr);
+    return n > 0 ? static_cast<int>(n) : -1;
+}
+
+// govr_vr_model_load copies the official controller mesh once SteamVR has it
+// ready: 1 = loaded, 0 = still loading, -1 = failed.
+int govr_vr_model_load(unsigned int device, float *pos, float *nrm, unsigned short *idx,
+                       int maxVerts, int maxIdx, int *nv, int *ni, char *name, int namelen) {
+    if (g_sys == nullptr || g_models == nullptr || pos == nullptr || nrm == nullptr ||
+        idx == nullptr || device >= vr::k_unMaxTrackedDeviceCount) {
+        return -1;
+    }
+    char modelName[vr::k_unMaxPropertyStringSize];
+    if (govr_vr_model_name(device, modelName, sizeof(modelName)) <= 0) {
+        snprintf(name, static_cast<size_t>(namelen), "no-model-name");
+        return -1;
+    }
+    vr::RenderModel_t *model = nullptr;
+    vr::EVRRenderModelError err = g_models->LoadRenderModel_Async(modelName, &model);
+    if (err == vr::VRRenderModelError_Loading) {
+        snprintf(name, static_cast<size_t>(namelen), "%s", modelName);
+        return 0;
+    }
+    if (err != vr::VRRenderModelError_None || model == nullptr) {
+        snprintf(name, static_cast<size_t>(namelen), "%s (error %d)", modelName, static_cast<int>(err));
+        return -1;
+    }
+    int n = static_cast<int>(model->unVertexCount);
+    if (n > maxVerts) {
+        n = maxVerts;
+    }
+    int t = static_cast<int>(model->unTriangleCount) * 3;
+    if (t > maxIdx) {
+        t = maxIdx;
+    }
+    for (int i = 0; i < n; i++) {
+        const vr::RenderModel_Vertex_t &v = model->rVertexData[i];
+        pos[i * 3 + 0] = v.vPosition.v[0];
+        pos[i * 3 + 1] = v.vPosition.v[1];
+        pos[i * 3 + 2] = v.vPosition.v[2];
+        nrm[i * 3 + 0] = v.vNormal.v[0];
+        nrm[i * 3 + 1] = v.vNormal.v[1];
+        nrm[i * 3 + 2] = v.vNormal.v[2];
+    }
+    for (int i = 0; i < t; i++) {
+        idx[i] = model->rIndexData[i];
+    }
+    snprintf(name, static_cast<size_t>(namelen), "%s", modelName);
+    *nv = n;
+    *ni = t;
+    g_models->FreeRenderModel(model);
+    return 1;
 }
 
 void govr_vr_shutdown(void) {
