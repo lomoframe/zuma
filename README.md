@@ -24,10 +24,16 @@ start-up.
 - **Hand-tracked aiming**: the launcher sits in the right hand; aim by pointing
   the controller, fire with the trigger. The ball is a real projectile with
   gravity, not a raycast hit.
-- **Room-scale presentation**: the board stands on a table in front of you,
+- **Room-scale presentation**: the playfield stands on a table in front of you,
   tilted back 20° like a pinball playfield; the title screen is anchored at a
   fixed spot in the room, so looking around moves the view past it instead of
   dragging it along.
+- **The table frame**: the table has its own coordinate system — its origin is
+  the centre of the felt, "table height" is the distance from that origin down
+  to the floor (**0.50 m** by default), and the tilt turns the whole table about
+  the same origin (**20°** by default). Both are on the controller: the right
+  stick moves the height between 0.15 m and 1.65 m, the left stick trims the
+  tilt between flat and 35°.
 - The desktop window is the development/mirror view of the left eye.
 
 ### Screenshots
@@ -48,8 +54,8 @@ the right hand and its beam.)*
 | Fire | Right trigger | Left click / `Space` |
 | Restart after a loss | Right trigger | `R` |
 | Load the next level after a win | Right trigger | `Space` / left click |
-| Raise / lower the whole scene | Right stick up / down | — |
-| Tilt the board | Left stick up / down (up = flatter) | — |
+| Raise / lower the table (height above the floor) | Right stick up / down | — |
+| Tilt the table (about its centre) | Left stick up / down (up = flatter) | — |
 | Quit | SteamVR menu | `Esc` |
 
 The loaded bead rides at the controller; there is no reticle at the end of the
@@ -198,7 +204,7 @@ changing any on-screen text.
   射线末端不画准星——射线停在哪颗球上就插在哪。
 - **场景**：盘面立在面前的桌上，像弹球台一样后仰 20°；标题页固定在房间里某个
   坐标，转头不会拖着它走。桌面窗口只是左眼的调试镜像。
-- 右手摇杆上下推可以整体升降场景（桌子、盘面、HUD 一起动，±0.65/0.85 m）；左手摇杆上下调盘面倾角（向上更平、向下更陡，0–35°）。
+- 桌面有自己的坐标系：原点取毡面中心，**桌面高度＝原点到地面的距离（默认 0.50 m）**，倾角绕这个原点旋转（默认 20°）。右手摇杆上下调高度（0.15–1.65 m），左手摇杆上下调倾角（向上更平、向下更陡，0–35°）；桌子与盘面作为同一个刚体一起转，HUD 文字画在桌面平面上。
 - 过关后结算页会等你扣扳机：一击沿射线方向、20° 圆锥内随机角度喷出 30 颗各色球，
   就是普通的空射（同样速度、同样弹道），伴随一声「砰」，随后进入下一关。
 - 规则：线路/盘形每关随机（单线螺旋、最多两层环、迷宫/圆弧发卡、波浪发卡、

@@ -34,7 +34,7 @@ type app struct {
 	board        mgl32.Mat4
 	boardInv     mgl32.Mat4
 	placedBoard  game.Board
-	sceneLift    float32 // right stick: whole scene up/down, metres
+	tableY       float32 // table height: floor to the table origin, metres
 	winAdvanceAt float64 // win screen: when the next level loads
 	tiltDeg      float32 // left stick: board tilt, degrees
 	lastAimT     float64
@@ -84,12 +84,17 @@ func pressForward(d mgl32.Vec3, deg float32) mgl32.Vec3 {
 }
 
 const (
-	vrBoardY     = 0.86
-	vrBoardZ     = -1.55
-	vrBoardScale = 0.55
+	// The table has its own frame. Its origin is the centre of the felt; the
+	// height below is the distance from that origin to the floor, the right
+	// stick moves it, and the tilt turns the whole table about the same origin.
+	tableHeight0 = 0.50
+	tableMinY    = 0.15
+	tableMaxY    = 1.65
+	tableZ       = -1.55
+	tableScale   = 0.55
 	// The playfield leans toward the player: the near edge stays on the table
 	// and the far edge rises, like a pinball table.
-	boardTiltDeg = 20
+	tableTiltDeg = 20
 	boardHingeZ  = 1.55
 )
 
@@ -175,7 +180,8 @@ func main() {
 	}
 	renderer.StartSplash(splashStart, *title)
 
-	a.tiltDeg = float32(boardTiltDeg)
+	a.tiltDeg = float32(tableTiltDeg)
+	a.tableY = tableHeight0
 	a.placeBoard()
 
 	// Paint the loading cover before SteamVR comes up: vr.Init blocks for a
@@ -427,7 +433,10 @@ func cameraVP(cam camera, w, h int) (mgl32.Mat4, mgl32.Vec3) {
 	if w == 0 || h == 0 {
 		w, h = 1, 1
 	}
-	target := mgl32.Vec3{0, 0.90, -0.15}
+	// The desktop window renders the board in its own frame (no table offset),
+	// tilted about its centre; the target sits below the origin so the felt
+	// stays framed now that the tilt no longer lifts the board.
+	target := mgl32.Vec3{0, 0.42, -0.15}
 	cp := math.Cos(cam.pitch)
 	eye := mgl32.Vec3{
 		target[0] + float32(cam.dist*cp*math.Sin(cam.yaw)),
@@ -470,7 +479,7 @@ func (a *app) renderMirror(now float64) {
 		a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
 		return
 	}
-	a.r.DrawStatic(proj.Mul4(view), a.tableWorld)
+	a.r.DrawStatic(proj.Mul4(view), a.board)
 	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
@@ -606,8 +615,8 @@ func (a *app) updateVRAim(now float64) {
 		}
 		a.lastAimT = now
 		if v := st.AxisY; math.Abs(float64(v)) > 0.2 {
-			a.sceneLift += v * liftSpeed * float32(dt)
-			a.sceneLift = float32(math.Max(-0.65, math.Min(0.85, float64(a.sceneLift))))
+			a.tableY += v * liftSpeed * float32(dt)
+			a.tableY = float32(math.Max(tableMinY, math.Min(tableMaxY, float64(a.tableY))))
 			a.placeBoard()
 		}
 		// Left stick up/down trims the board tilt: up flattens, down steepens.
@@ -658,36 +667,28 @@ func (a *app) updateVRAim(now float64) {
 	a.logVR(now, st, ok, dev)
 }
 
-// placeBoard builds the board transform for the current level. The tilt pivots
-// on the board's own near edge, so the felt always meets the table no matter how
-// big the random board is; the angle is capped so a big board does not push its
-// far edge up towards eye height.
+// placeBoard builds the table frame for the current level: the table's origin
+// is the centre of the felt, at a.tableY above the floor, and the tilt turns
+// the whole table (slab and playfield alike) about that origin. The table is
+// one rigid body, so the felt can never sink into its own slab.
 func (a *app) placeBoard() {
 	bd := a.g.Board
-	hinge := bd.HalfH()
 	deg := a.tiltDeg
-	if hinge > 0.01 {
-		const farRise = 0.85 // metres, the height the first tilted board gave
-		if s := farRise / (2 * hinge * vrBoardScale); s < 1 {
-			if lim := float32(math.Asin(float64(s)) * 180 / math.Pi); lim < deg {
-				deg = lim
-			}
-		}
-	}
-	tilt := mgl32.Translate3D(0, 0, hinge).
-		Mul4(mgl32.HomogRotate3DX(mgl32.DegToRad(deg))).
-		Mul4(mgl32.Translate3D(0, 0, -hinge))
-	a.tableWorld = mgl32.Translate3D(0, vrBoardY+a.sceneLift, vrBoardZ).
-		Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
+	tilt := mgl32.HomogRotate3DX(mgl32.DegToRad(deg))
 	a.tilt = tilt
-	a.board = a.tableWorld.Mul4(tilt)
+	a.tableWorld = mgl32.Translate3D(0, a.tableY, tableZ).
+		Mul4(tilt).
+		Mul4(mgl32.Scale3D(tableScale, tableScale, tableScale))
+	// With the origin at the felt's centre the board and the table share one
+	// frame: there is no hinge offset left to apply.
+	a.board = a.tableWorld
 	a.boardInv = a.board.Inv()
 	if bd != a.placedBoard {
-		near := a.board.Mul4x1(mgl32.Vec4{0, 0, hinge, 1}).Y()
-		centre := a.board.Mul4x1(mgl32.Vec4{0, 0, 0, 1}).Y()
-		far := a.board.Mul4x1(mgl32.Vec4{0, 0, -hinge, 1}).Y()
-		log.Printf("board %.2fx%.2f: tilt %.1f deg, felt near %.2f m, centre %.2f m, far %.2f m (table top %.2f m)",
-			bd.W, bd.H, deg, near, centre, far, vrBoardY+a.sceneLift-0.10*vrBoardScale)
+		half := bd.HalfH()
+		near := a.board.Mul4x1(mgl32.Vec4{0, 0, half, 1}).Y()
+		far := a.board.Mul4x1(mgl32.Vec4{0, 0, -half, 1}).Y()
+		log.Printf("table %.2fx%.2f: height %.2f m, tilt %.1f deg, felt near %.2f / centre %.2f / far %.2f m, slab top %.2f m",
+			bd.W, bd.H, a.tableY, deg, near, a.tableY, far, a.tableY-0.10*tableScale)
 	}
 	a.placedBoard = bd
 }
@@ -742,7 +743,7 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	if a.handPoseOK {
 		devO = fmt.Sprintf("(%.2f,%.2f,%.2f)", a.handPose[12], a.handPose[13], a.handPose[14])
 	}
-	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v lift=%.2f tilt=%.1f frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.sceneLift, a.tiltDeg, a.vrFrames)
+	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v height=%.2f tilt=%.1f frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.tableY, a.tiltDeg, a.vrFrames)
 	a.vrFrames = 0
 }
 

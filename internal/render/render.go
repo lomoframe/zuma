@@ -835,7 +835,10 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now fl
 	}
 	r.drawText(vp, base, -0.74, 0.585, 38, line2, alignLeft, col2)
 
-	overlay := world.Mul4(mgl32.Translate3D(0, 0, 0.92))
+	// The win/lose overlay floats over the middle of the felt: with the table
+	// tilting about its own centre, the near edge is the lowest part of the
+	// playfield and text parked there ends up face-on to the table's front.
+	overlay := world.Mul4(mgl32.Translate3D(0, 0, -0.25))
 	switch g.State {
 	case game.StateWon:
 		r.drawText(vp, overlay, 0, 1.06, 64, fmt.Sprintf("第 %d 关 通过!", g.Level), alignCenter, rgba(1.0, 0.93, 0.55, 1))
