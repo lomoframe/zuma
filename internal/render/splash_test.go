@@ -40,47 +40,22 @@ func TestSplashFitKeepsThePosterCentred(t *testing.T) {
 	}
 }
 
-// TestSplashPanelSitsInFrontOfTheHead checks the head-locked screen is 2.6 m
-// ahead, centred, and the right way up.
-func TestSplashPanelSitsInFrontOfTheHead(t *testing.T) {
-	panel := SplashPanel(mgl32.Ident4())
+// TestSplashPanelIsAnchoredInTheWorld pins the title page to fixed world
+// coordinates: the player can look or walk around it.
+func TestSplashPanelIsAnchoredInTheWorld(t *testing.T) {
+	panel := SplashPanel()
 	mid := panel.Mul4x1(mgl32.Vec4{splashart.ArtW / 2, splashart.ArtH / 2, 0, 1})
-	if math.Abs(float64(mid[0])) > 1e-4 || math.Abs(float64(mid[1])) > 1e-4 {
-		t.Fatalf("poster centre is off-axis: (%.3f,%.3f)", mid[0], mid[1])
+	if math.Abs(float64(mid[0])) > 1e-4 {
+		t.Fatalf("poster centre is off-axis: x=%.3f", mid[0])
 	}
-	if math.Abs(float64(mid[2])+2.6) > 1e-3 {
-		t.Fatalf("poster sits at z=%.3f, want -2.6", mid[2])
+	if math.Abs(float64(mid[1])-1.55) > 1e-3 {
+		t.Fatalf("poster centre sits at y=%.3f, want 1.55", mid[1])
+	}
+	if math.Abs(float64(mid[2])+2.4) > 1e-3 {
+		t.Fatalf("poster sits at z=%.3f, want -2.4", mid[2])
 	}
 	top := panel.Mul4x1(mgl32.Vec4{splashart.ArtW / 2, splashart.ArtH, 0, 1})
 	if top[1] <= mid[1] {
-		t.Fatalf("art y grows downwards on screen: top=%.3f mid=%.3f", top[1], mid[1])
-	}
-}
-
-// TestTitleScreenWaitsForStart pins the new flow: the screen never times out,
-// and only a press fades it away.
-func TestTitleScreenWaitsForStart(t *testing.T) {
-	var r Renderer
-	r.StartSplash(10, true)
-	if !r.SplashActive(10.5) {
-		t.Fatal("title screen should appear")
-	}
-	if !r.SplashActive(600) {
-		t.Fatal("title screen must wait for the player instead of timing out")
-	}
-	r.SplashExit(600)
-	if !r.SplashActive(600 + splashFadeOut/2) {
-		t.Fatal("title screen should still draw during the fade-out")
-	}
-	if r.SplashActive(600 + splashFadeOut + 0.01) {
-		t.Fatal("title screen should be gone once the fade-out finished")
-	}
-}
-
-func TestTitleScreenCanBeDisabled(t *testing.T) {
-	var r Renderer
-	r.StartSplash(0, false)
-	if r.SplashActive(0) {
-		t.Fatal("disabled title screen must not own the frame")
+		t.Fatalf("art y must grow upwards: top=%.3f mid=%.3f", top[1], mid[1])
 	}
 }

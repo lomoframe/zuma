@@ -282,13 +282,15 @@ func SplashFit(w, h int) mgl32.Mat4 {
 	}
 }
 
-// SplashPanel places the art as a head-locked screen 2.6 m in front of the
-// player, so the whole poster stays inside the headset's field of view.
-func SplashPanel(head mgl32.Mat4) mgl32.Mat4 {
-	const panelW = 4.6
+// SplashPanel places the poster at a fixed spot in the play area: 4 m wide,
+// centred 2.4 m in front of the origin at eye height. It is not attached to the
+// headset, so looking around moves the view past it instead of dragging it along.
+func SplashPanel() mgl32.Mat4 {
+	const panelW = 4.0
+	const distance = 2.4
+	const centreY = 1.55
 	s := panelW / float32(splashart.ArtW)
-	local := mgl32.Translate3D(0, 0, -2.6).
+	return mgl32.Translate3D(0, centreY, -distance).
 		Mul4(mgl32.Scale3D(s, s, s)).
 		Mul4(mgl32.Translate3D(-splashart.ArtW/2, -splashart.ArtH/2, 0))
-	return head.Mul4(local)
 }

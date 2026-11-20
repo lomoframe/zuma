@@ -437,7 +437,7 @@ func (a *app) renderMirror(now float64) {
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
 	if a.r.SplashActive(now) {
-		a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(head), now)
+		a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
 		return
 	}
 	a.r.DrawStatic(proj.Mul4(view), a.tableWorld)
@@ -462,7 +462,7 @@ func (a *app) renderEyes(now float64) {
 		gl.Viewport(0, 0, rt.W, rt.H)
 		clearScene()
 		if a.r.SplashActive(now) {
-			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(head), now)
+			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
 		} else {
 			a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 		}
@@ -587,10 +587,14 @@ func (a *app) updateVRAim(now float64) {
 	}
 
 	if st.Trigger && !a.prevTrig {
-		if a.g.LoseReady() {
+		switch {
+		case a.r.SplashActive(now):
+			// On the title page a trigger pull is "start", not a shot.
+			a.r.SplashExit(now)
+		case a.g.LoseReady():
 			a.g.Restart()
 			a.playEvents()
-		} else {
+		default:
 			a.fire()
 		}
 	}
