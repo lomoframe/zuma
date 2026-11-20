@@ -555,7 +555,10 @@ func (r *Renderer) drawController(pose mgl32.Mat4) {
 	}
 }
 
-func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game.Game, now float64, aimO, aimD mgl32.Vec3, aimOK bool, hand mgl32.Mat4, handOK bool) {
+// Draw renders the round. world places the table (it carries the tilt); hud is
+// the same frame without that tilt, so the score and result text always stand
+// upright in the room.
+func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g *game.Game, now float64, aimO, aimD mgl32.Vec3, aimOK bool, hand mgl32.Mat4, handOK bool) {
 	r.meshProg.Bind()
 	r.meshProg.Mat4(r.uVP, vp)
 	r.meshProg.Vec3(r.uCam, cam[0], cam[1], cam[2])
@@ -627,7 +630,7 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		r.drawHand(world, g, aimO, aimD, now)
 	}
 
-	r.drawHUD(vp, world, g, now)
+	r.drawHUD(vp, hud, g, now)
 }
 
 func (r *Renderer) drawDot(world mgl32.Mat4, pos mgl32.Vec2, radius float32) {
@@ -811,13 +814,13 @@ func (r *Renderer) drawBallWorld(world mgl32.Mat4, at mgl32.Vec3, radius float32
 }
 
 // drawHUD lays the score plaque above the far rim.
-func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now float64) {
-	base := world.Mul4(mgl32.Translate3D(0, 0, -1.88))
+func (r *Renderer) drawHUD(vp mgl32.Mat4, hud mgl32.Mat4, g *game.Game, now float64) {
+	base := hud.Mul4(mgl32.Translate3D(0, 0, -1.88))
 	scoreCol := rgba(1, 1, 1, 0.97)
 	if f := g.Flash; f > 0 {
 		scoreCol = rgba(1, 1-0.15*f, 1-0.55*f, 0.97)
 	}
-	r.drawText(vp, base, -0.74, 0.845, 46, fmt.Sprintf("分数 %d   第 %d 关", g.Score, g.Level), alignLeft, scoreCol)
+	r.drawText(vp, base, -0.74, 1.15, 46, fmt.Sprintf("分数 %d   第 %d 关", g.Score, g.Level), alignLeft, scoreCol)
 	line2 := ""
 	switch {
 	case g.State == game.StateLost && g.LoseReady():
@@ -833,12 +836,12 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, world mgl32.Mat4, g *game.Game, now fl
 	if g.State == game.StateLost && g.LoseReady() {
 		col2 = rgba(1.0, 0.72, 0.55, 0.95)
 	}
-	r.drawText(vp, base, -0.74, 0.585, 38, line2, alignLeft, col2)
+	r.drawText(vp, base, -0.74, 0.89, 38, line2, alignLeft, col2)
 
 	// The win/lose overlay floats over the middle of the felt: with the table
 	// tilting about its own centre, the near edge is the lowest part of the
 	// playfield and text parked there ends up face-on to the table's front.
-	overlay := world.Mul4(mgl32.Translate3D(0, 0, -0.25))
+	overlay := hud.Mul4(mgl32.Translate3D(0, 0, -0.25))
 	switch g.State {
 	case game.StateWon:
 		r.drawText(vp, overlay, 0, 1.06, 64, fmt.Sprintf("第 %d 关 通过!", g.Level), alignCenter, rgba(1.0, 0.93, 0.55, 1))

@@ -459,7 +459,7 @@ func (a *app) renderDesktop(now float64) {
 		return
 	}
 	a.r.DrawStatic(vp, mgl32.Ident4())
-	a.r.Draw(vp, eye, a.tilt, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+	a.r.Draw(vp, eye, a.tilt, mgl32.Ident4(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
 func (a *app) renderMirror(now float64) {
@@ -480,7 +480,7 @@ func (a *app) renderMirror(now float64) {
 		return
 	}
 	a.r.DrawStatic(proj.Mul4(view), a.board)
-	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+	a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
 func (a *app) renderEyes(now float64) {
@@ -503,7 +503,7 @@ func (a *app) renderEyes(now float64) {
 		if a.r.SplashActive(now) {
 			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
 		} else {
-			a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+			a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 		}
 		rt.Resolve()
 		gl.Flush()
@@ -691,6 +691,13 @@ func (a *app) placeBoard() {
 			bd.W, bd.H, a.tableY, deg, near, a.tableY, far, a.tableY-0.10*tableScale)
 	}
 	a.placedBoard = bd
+}
+
+// hudFrame is where the score and result text live: the table frame without its
+// tilt, so the text stands upright in the room at every board angle.
+func (a *app) hudFrame() mgl32.Mat4 {
+	return mgl32.Translate3D(0, a.tableY, tableZ).
+		Mul4(mgl32.Scale3D(tableScale, tableScale, tableScale))
 }
 
 // pressFire is the single fire button: on the win screen it throws the

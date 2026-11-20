@@ -33,7 +33,8 @@ start-up.
   to the floor (**0.50 m** by default), and the tilt turns the whole table about
   the same origin (**20°** by default). Both are on the controller: the right
   stick moves the height between 0.15 m and 1.65 m, the left stick trims the
-  tilt between flat and 35°.
+  tilt between flat and 35°. The score header and the win/lose text keep their
+  own upright frame: they stand at 90° to the floor whatever the table angle.
 - The desktop window is the development/mirror view of the left eye.
 
 ### Screenshots
@@ -204,7 +205,7 @@ changing any on-screen text.
   射线末端不画准星——射线停在哪颗球上就插在哪。
 - **场景**：盘面立在面前的桌上，像弹球台一样后仰 20°；标题页固定在房间里某个
   坐标，转头不会拖着它走。桌面窗口只是左眼的调试镜像。
-- 桌面有自己的坐标系：原点取毡面中心，**桌面高度＝原点到地面的距离（默认 0.50 m）**，倾角绕这个原点旋转（默认 20°）。右手摇杆上下调高度（0.15–1.65 m），左手摇杆上下调倾角（向上更平、向下更陡，0–35°）；桌子与盘面作为同一个刚体一起转，HUD 文字画在桌面平面上。
+- 桌面有自己的坐标系：原点取毡面中心，**桌面高度＝原点到地面的距离（默认 0.50 m）**，倾角绕这个原点旋转（默认 20°）。右手摇杆上下调高度（0.15–1.65 m），左手摇杆上下调倾角（向上更平、向下更陡，0–35°）；桌子与盘面作为同一个刚体一起转。HUD 信息与结算文字独占一个「直立坐标系」——在世界里始终与地面垂直，不跟桌面倾角走。
 - 过关后结算页会等你扣扳机：一击沿射线方向、20° 圆锥内随机角度喷出 30 颗各色球，
   就是普通的空射（同样速度、同样弹道），伴随一声「砰」，随后进入下一关。
 - 规则：线路/盘形每关随机（单线螺旋、最多两层环、迷宫/圆弧发卡、波浪发卡、
