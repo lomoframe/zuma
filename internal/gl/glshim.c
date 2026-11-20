@@ -79,6 +79,7 @@ void govr_uniform_1i(int loc, int v) { glUniform1i(loc, v); }
 void govr_uniform_1f(int loc, float v) { glUniform1f(loc, v); }
 void govr_uniform_3f(int loc, float x, float y, float z) { glUniform3f(loc, x, y, z); }
 void govr_uniform_4f(int loc, float x, float y, float z, float w) { glUniform4f(loc, x, y, z, w); }
+void govr_uniform_mat3(int loc, const float *m) { glUniformMatrix3fv(loc, 1, GL_FALSE, m); }
 void govr_uniform_mat4(int loc, const float *m) { glUniformMatrix4fv(loc, 1, GL_FALSE, m); }
 void govr_uniform_mat4_array(int loc, int count, const float *m) {
     glUniformMatrix4fv(loc, count, GL_FALSE, m);

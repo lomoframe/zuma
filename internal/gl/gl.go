@@ -156,6 +156,12 @@ func (p Program) Vec3(loc int32, x, y, z float32) {
 func (p Program) Vec4(loc int32, x, y, z, w float32) {
 	C.govr_uniform_4f(C.int(loc), C.float(x), C.float(y), C.float(z), C.float(w))
 }
+
+// Mat3 uploads a 3x3 matrix, used for per-ball texture orientation.
+func (p Program) Mat3(loc int32, m [9]float32) {
+	C.govr_uniform_mat3(C.int(loc), (*C.float)(unsafe.Pointer(&m[0])))
+}
+
 func (p Program) Mat4(loc int32, m [16]float32) {
 	C.govr_uniform_mat4(C.int(loc), (*C.float)(unsafe.Pointer(&m[0])))
 }

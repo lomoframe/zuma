@@ -51,7 +51,7 @@ in vec3 vNrm;
 in vec3 vWorld;
 in vec4 vCol;
 in vec3 vLocal;
-uniform float uRoll;
+uniform mat3 uBallRot;
 uniform float uBall;
 uniform vec4 uTint;
 uniform vec3 uCam;
@@ -65,8 +65,7 @@ void main() {
         if (uBall > 0.5) {
                 // Two dark meridians plus a faint speckle; rotating them is the
                 // rolling cue.
-                float c = cos(uRoll), sn = sin(uRoll);
-                vec3 p = vec3(vLocal.x, vLocal.y * c - vLocal.z * sn, vLocal.y * sn + vLocal.z * c);
+                vec3 p = uBallRot * vLocal;
                 float lon = atan(p.z, p.x);
                 float seam = abs(fract(lon / 3.14159265 + 0.5) - 0.5);
                 base *= mix(0.58, 1.0, smoothstep(0.05, 0.115, seam));
@@ -215,8 +214,9 @@ type Renderer struct {
 	meshProg gl.Program
 	textProg gl.Program
 
-	uVP, uModel, uTint, uCam, uGloss, uUnlit, uRoll, uBall int32
-	uMVP, uTex, uColor                                     int32
+	uVP, uModel, uTint, uCam, uGloss, uUnlit, uBall int32
+	uBallRot                                        mat3Loc
+	uMVP, uTex, uColor                              int32
 
 	board    *Mesh
 	path     *game.Path
@@ -230,6 +230,47 @@ type Renderer struct {
 	quad     *textQuad
 
 	texts map[string]*textTex
+}
+
+// mat3Loc is just a uniform location, named to keep the struct readable.
+type mat3Loc = int32
+
+func rotAxis(axis mgl32.Vec3, angle float32) mgl32.Mat3 {
+	a := axis.Normalize()
+	x, y, z := a[0], a[1], a[2]
+	c, sn := float32(math.Cos(float64(angle))), float32(math.Sin(float64(angle)))
+	t := 1 - c
+	// Row-major entries, then stored column-major.
+	return mgl32.Mat3{
+		t*x*x + c, t*x*y + sn*z, t*x*z - sn*y,
+		t*x*y - sn*z, t*y*y + c, t*y*z + sn*x,
+		t*x*z + sn*y, t*y*z - sn*x, t*z*z + c,
+	}
+}
+
+func mat3Mul(a, b mgl32.Mat3) mgl32.Mat3 {
+	var r mgl32.Mat3
+	for col := 0; col < 3; col++ {
+		for row := 0; row < 3; row++ {
+			r[col*3+row] = a[0*3+row]*b[col*3+0] + a[1*3+row]*b[col*3+1] + a[2*3+row]*b[col*3+2]
+		}
+	}
+	return r
+}
+
+// randomBallRot gives every bead its own texture orientation so the seams do
+// not line up across the chain.
+func randomBallRot(id int) mgl32.Mat3 {
+	h := uint32(id)*2654435761 + 0x9e3779b9
+	ax := mgl32.Vec3{
+		float32(h%1000)/1000 - 0.5,
+		float32((h>>10)%1000)/1000 - 0.5,
+		float32((h>>20)%1000)/1000 - 0.5,
+	}
+	if ax.Len() < 0.1 {
+		ax = mgl32.Vec3{0.3, 0.8, 0.2}
+	}
+	return rotAxis(ax, float32(h%628)/100)
 }
 
 // SetPath rebuilds the board geometry when a level's spiral changes. The old
@@ -262,8 +303,8 @@ func New() (*Renderer, error) {
 		uCam:     mp.Loc("uCam"),
 		uGloss:   mp.Loc("uGloss"),
 		uUnlit:   mp.Loc("uUnlit"),
-		uRoll:    mp.Loc("uRoll"),
 		uBall:    mp.Loc("uBall"),
+		uBallRot: mat3Loc(mp.Loc("uBallRot")),
 		uMVP:     tp.Loc("uMVP"),
 		uTex:     tp.Loc("uTex"),
 		uColor:   tp.Loc("uColor"),
@@ -484,7 +525,7 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 	gl.CullFaceMode(gl.Back)
 
 	r.meshProg.Float(r.uBall, 0)
-	r.meshProg.Float(r.uRoll, 0)
+	r.meshProg.Mat3(r.uBallRot, mgl32.Ident3())
 	r.meshProg.Mat4(r.uModel, world)
 	r.meshProg.Vec4(r.uTint, 1, 1, 1, 1)
 	r.meshProg.Float(r.uGloss, 0.25)
@@ -512,8 +553,12 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		c := ballColor(bd.Color)
 		r.meshProg.Mat4(r.uModel, model)
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
+		_, tan := g.Path.At(bd.S)
+		side := mgl32.Vec3{tan.Y(), 0, -tan.X()} // perpendicular to travel, horizontal
+		roll := rotAxis(side, bd.S/game.BallR)
+		r.meshProg.Mat3(r.uBallRot, mat3Mul(roll, randomBallRot(bd.ID)))
 		r.meshProg.Float(r.uBall, 1)
-		r.meshProg.Float(r.uRoll, -bd.S/game.BallR)
+		r.meshProg.Float(r.uGloss, 0.10)
 		r.ball.draw()
 		r.meshProg.Float(r.uBall, 0)
 	}
@@ -528,7 +573,8 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		r.meshProg.Mat4(r.uModel, model)
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
 		r.meshProg.Float(r.uBall, 1)
-		r.meshProg.Float(r.uRoll, -float32(now)*40)
+		r.meshProg.Float(r.uGloss, 0.10)
+		r.meshProg.Mat3(r.uBallRot, mat3Mul(rotAxis(mgl32.Vec3{0.4, 1, 0.2}, float32(now)*18), randomBallRot(sh.Color+7)))
 		r.ball.draw()
 		r.meshProg.Float(r.uBall, 0)
 	}
@@ -719,10 +765,10 @@ func (r *Renderer) drawBallWorld(world mgl32.Mat4, at mgl32.Vec3, radius float32
 	c := ballColor(color)
 	r.meshProg.Mat4(r.uModel, model)
 	r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
-	r.meshProg.Float(r.uGloss, 1.2)
+	r.meshProg.Float(r.uGloss, 0.10)
 	r.meshProg.Float(r.uUnlit, 0)
 	r.meshProg.Float(r.uBall, 1)
-	r.meshProg.Float(r.uRoll, float32(phase)*2.0)
+	r.meshProg.Mat3(r.uBallRot, mat3Mul(rotAxis(mgl32.Vec3{0.3, 1, 0.1}, float32(phase)*0.8), randomBallRot(color+13)))
 	r.ball.draw()
 	r.meshProg.Float(r.uBall, 0)
 }

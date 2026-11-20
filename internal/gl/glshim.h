@@ -32,6 +32,7 @@ void govr_uniform_1i(int loc, int v);
 void govr_uniform_1f(int loc, float v);
 void govr_uniform_3f(int loc, float x, float y, float z);
 void govr_uniform_4f(int loc, float x, float y, float z, float w);
+void govr_uniform_mat3(int loc, const float *m);
 void govr_uniform_mat4(int loc, const float *m);
 void govr_uniform_mat4_array(int loc, int count, const float *m);
 
