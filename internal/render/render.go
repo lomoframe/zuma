@@ -244,7 +244,6 @@ type Renderer struct {
 	uSplashTint            int32
 	splashBG               uint32
 	splashBGQuad           *textQuad
-	splashBar              *Mesh
 	splash                 *splashState
 
 	texts map[string]*textTex

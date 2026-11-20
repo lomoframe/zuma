@@ -102,16 +102,16 @@ func main() {
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
 	demo := flag.String("demo", "", "screenshot helper: \"won\" or \"lost\" shows the overlay")
-	splash := flag.Float64("splash", 3.4, "loading animation seconds before the level starts (0 = off)")
+	title := flag.Bool("title", true, "show the title screen until the player presses start")
 	yaw := flag.Float64("yaw", 0, "desktop camera yaw in radians")
 	pitch := flag.Float64("pitch", 0.60, "desktop camera pitch in radians")
 	dist := flag.Float64("dist", 6.2, "desktop camera distance in metres")
 	flag.Bool("hud-debug", false, "print text quad sizes")
 	flag.Parse()
-	splashSet := false
+	titleSet := false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "splash" {
-			splashSet = true
+		if f.Name == "title" {
+			titleSet = true
 		}
 	})
 	render.SetTextDebug(flag.Lookup("hud-debug").Value.String() == "true")
@@ -159,14 +159,14 @@ func main() {
 		r:   renderer,
 		cam: camera{yaw: *yaw, pitch: *pitch, dist: *dist},
 	}
-	if *shot != "" && !splashSet {
-		*splash = 0 // reference screenshots show the level, not the loading art
+	if *shot != "" && !titleSet {
+		*title = false // reference screenshots show the level, not the title art
 	}
 	splashStart := glfw.GetTime()
 	if *shot != "" {
 		splashStart = 0 // screenshots run on the fixed frame clock
 	}
-	renderer.StartSplash(splashStart, *splash)
+	renderer.StartSplash(splashStart, *title)
 
 	a.tableWorld = mgl32.Translate3D(0, vrBoardY, vrBoardZ).Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
 	tilt := mgl32.Translate3D(0, 0, boardHingeZ).
@@ -178,14 +178,14 @@ func main() {
 
 	// Paint the loading cover before SteamVR comes up: vr.Init blocks for a
 	// second or two, and an empty window looks like a crash.
-	if *splash > 0 {
+	if *title {
 		gl.BindFramebuffer(0)
 		w, h := win.GetFramebufferSize()
 		gl.Viewport(0, 0, int32(w), int32(h))
 		clearScene()
 		renderer.DrawSplash(mgl32.Ident4(), render.SplashFit(w, h), splashStart+1.0)
 		win.SwapBuffers()
-		log.Printf("loading screen: %.1f s", *splash)
+		log.Printf("title screen: press start to play")
 	}
 
 	a.vrDebug = *vrDebug
@@ -206,7 +206,7 @@ func main() {
 	win.SetMouseButtonCallback(func(_ *glfw.Window, button glfw.MouseButton, action glfw.Action, _ glfw.ModifierKey) {
 		if button == glfw.MouseButton1 && action == glfw.Press {
 			if a.r.SplashActive(glfw.GetTime()) {
-				a.r.EndSplash()
+				a.r.SplashExit(glfw.GetTime())
 				return
 			}
 			a.fire()
@@ -226,7 +226,7 @@ func main() {
 			log.Printf("restarted")
 		case glfw.KeySpace:
 			if a.r.SplashActive(glfw.GetTime()) {
-				a.r.EndSplash()
+				a.r.SplashExit(glfw.GetTime())
 				return
 			}
 			a.fire()

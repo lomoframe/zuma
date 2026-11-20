@@ -367,15 +367,6 @@ func shade(px, py float64) (col, float64) {
 		}
 	}
 
-	// -- loading track: dark channel with a gold hairline.
-	if py > 934 && py < 966 && math.Abs(px-960) < 322 {
-		n := valueNoise(px/6, py/6)
-		c = mix(c, col{0.008, 0.018, 0.020}.mul(0.9+0.2*n), 1)
-		if math.Abs(py-950) > 10 {
-			c = c.add(goldDeep.mul(0.35))
-		}
-	}
-
 	// -- vignette and film grain.
 	vd := math.Hypot(px-ArtW/2, py-ArtH/2)
 	c = c.mul(1 - 0.62*math.Pow(clamp01(vd/1150), 2.1))

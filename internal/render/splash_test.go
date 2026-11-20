@@ -56,3 +56,31 @@ func TestSplashPanelSitsInFrontOfTheHead(t *testing.T) {
 		t.Fatalf("art y grows downwards on screen: top=%.3f mid=%.3f", top[1], mid[1])
 	}
 }
+
+// TestTitleScreenWaitsForStart pins the new flow: the screen never times out,
+// and only a press fades it away.
+func TestTitleScreenWaitsForStart(t *testing.T) {
+	var r Renderer
+	r.StartSplash(10, true)
+	if !r.SplashActive(10.5) {
+		t.Fatal("title screen should appear")
+	}
+	if !r.SplashActive(600) {
+		t.Fatal("title screen must wait for the player instead of timing out")
+	}
+	r.SplashExit(600)
+	if !r.SplashActive(600 + splashFadeOut/2) {
+		t.Fatal("title screen should still draw during the fade-out")
+	}
+	if r.SplashActive(600 + splashFadeOut + 0.01) {
+		t.Fatal("title screen should be gone once the fade-out finished")
+	}
+}
+
+func TestTitleScreenCanBeDisabled(t *testing.T) {
+	var r Renderer
+	r.StartSplash(0, false)
+	if r.SplashActive(0) {
+		t.Fatal("disabled title screen must not own the frame")
+	}
+}

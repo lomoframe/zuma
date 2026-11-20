@@ -38,48 +38,50 @@ void main() {
         frag = texture(uTex, vUV) * uTint;
 }`
 
-// splashTiming shapes the loading animation.
+// splashTiming shapes the title screen.
 const (
-	splashFadeIn  = 0.45
-	splashFadeOut = 0.40
+	splashFadeIn  = 0.45 // fade up from black when the screen appears
+	splashFadeOut = 0.35 // fade back to black once the player starts
 )
 
-// splashState is the running loading animation.
+// splashState is the running title screen. It never advances on its own: the
+// player has to press a button, and only then does it fade out.
 type splashState struct {
-	start float64
-	dur   float64
-	done  bool
+	start   float64
+	leaving bool
+	leaveAt float64
+	done    bool
 }
 
-// StartSplash arms the loading animation; dur <= 0 disables it.
-func (r *Renderer) StartSplash(now, dur float64) {
-	if dur <= 0 {
+// StartSplash shows the title screen; enabled=false skips it entirely.
+func (r *Renderer) StartSplash(now float64, enabled bool) {
+	if !enabled {
 		r.splash = nil
 		return
 	}
-	r.splash = &splashState{start: now, dur: dur}
+	r.splash = &splashState{start: now}
 }
 
-// EndSplash drops the animation immediately (the player skipped it).
-func (r *Renderer) EndSplash() { r.splash = nil }
+// SplashExit starts the fade to the game (the player pressed start).
+func (r *Renderer) SplashExit(now float64) {
+	if s := r.splash; s != nil && !s.leaving {
+		s.leaving = true
+		s.leaveAt = now
+	}
+}
 
-// SplashActive reports whether the loading animation still owns the frame.
+// SplashActive reports whether the title screen still owns the frame. It never
+// expires on its own: only a press ends it, and then after the fade-out.
 func (r *Renderer) SplashActive(now float64) bool {
 	s := r.splash
-	return s != nil && !s.done && now-s.start < s.dur
-}
-
-// splashProgress maps the elapsed time to the bar fraction. It eases out so the
-// bar is quick off the mark and settles near the end.
-func (s *splashState) progress(now float64) float32 {
-	p := float32((now - s.start) / s.dur)
-	if p < 0 {
-		p = 0
+	if s == nil || s.done {
+		return false
 	}
-	if p > 1 {
-		p = 1
+	if s.leaving && now-s.leaveAt >= splashFadeOut {
+		s.done = true
+		return false
 	}
-	return 1 - (1-p)*(1-p)
+	return true
 }
 
 // DrawSplash renders one loading frame. artWorld maps art pixels (x right, y
@@ -179,47 +181,25 @@ func (r *Renderer) DrawSplash(vp, artWorld mgl32.Mat4, now float64) {
 	r.meshProg.Float(r.uUnlit, 0)
 	gl.Disable(gl.Blend)
 
-	// Progress fill over the painted track.
-	p := s.progress(now)
-	gl.Disable(gl.DepthTest)
-	r.meshProg.Float(r.uUnlit, 1)
-	r.meshProg.Vec4(r.uTint, 0.95, 0.75, 0.36, 1)
-	if p > 0.001 {
-		w := 632 * p
-		model := artWorld.
-			Mul4(mgl32.Translate3D(644, 125, 3)).
-			Mul4(mgl32.Scale3D(w, 16, 1))
-		r.meshProg.Mat4(r.uModel, model)
-		r.splashBar.draw()
-		// a brighter bead at the leading edge
-		model = artWorld.
-			Mul4(mgl32.Translate3D(644+w-8, 133, 4)).
-			Mul4(mgl32.Scale3D(9, 9, 9))
-		r.meshProg.Mat4(r.uModel, model)
-		r.meshProg.Vec4(r.uTint, 1.0, 0.94, 0.74, 1)
-		r.ball.draw()
-		r.meshProg.Vec4(r.uTint, 0.95, 0.75, 0.36, 1)
-	}
-	r.meshProg.Float(r.uUnlit, 0)
-
-	// Title, subtitle, progress label and the credit line.
+	// Title, subtitle, start prompt and the credit line.
 	base := func(x, y float32) mgl32.Mat4 {
 		return artWorld.Mul4(mgl32.Translate3D(x, y, 6)).Mul4(mgl32.Scale3D(312.5, 312.5, 312.5))
 	}
 	r.drawText(vp, base(146, 890), 0, 0, 168, "祖玛 VR", alignLeft, rgba(1.0, 0.86, 0.54, 1))
 	r.drawText(vp, base(158, 668), 0, 0, 52, "球链神庙", alignLeft, rgba(0.55, 0.90, 0.84, 0.96))
-	r.drawText(vp, base(960, 200), 0, 0, 34, fmt.Sprintf("加载中 %d%%", int(p*100)), alignCenter, rgba(0.86, 0.94, 0.92, 0.94))
+	// The prompt breathes so it reads as "waiting for you", not as a label.
+	pulse := 0.62 + 0.30*float32(math.Sin((now-s.start)*3.1))
+	r.drawText(vp, base(960, 210), 0, 0, 44, "按 空格 / 扳机 开始", alignCenter, rgba(0.95, 0.87, 0.62, pulse))
 	r.drawText(vp, base(1856, 64), 0, 0, 30, "github.com/lomoalbert", alignRight, rgba(0.66, 0.80, 0.84, 0.90))
-	r.drawText(vp, base(150, 104), 0, 0, 26, "空格 / 扳机 跳过", alignLeft, rgba(0.52, 0.66, 0.68, 0.72))
 
-	// Fade in from black and back out at the end.
+	// Fade up when the screen appears, fade out once the player pressed start.
 	elapsed := now - s.start
 	fade := float32(0)
 	if elapsed < splashFadeIn {
 		fade = 1 - float32(elapsed/splashFadeIn)
 	}
-	if left := s.dur - elapsed; left < splashFadeOut {
-		if f := 1 - float32(left/splashFadeOut); f > fade {
+	if s.leaving {
+		if f := float32((now - s.leaveAt) / splashFadeOut); f > fade {
 			fade = f
 		}
 	}
@@ -228,9 +208,6 @@ func (r *Renderer) DrawSplash(vp, artWorld mgl32.Mat4, now float64) {
 		r.splashProg.Mat4(r.uSplashMVP, mvp)
 		r.splashProg.Vec4(r.uSplashTint, 0, 0, 0, fade)
 		r.splashBGQuad.draw()
-	}
-	if elapsed >= s.dur {
-		s.done = true
 	}
 }
 
@@ -259,11 +236,6 @@ func (r *Renderer) newSplashGeometry() error {
 	r.splashBGQuad.upload([4]mgl32.Vec3{
 		{0, 0, 0}, {w, 0, 0}, {w, h, 0}, {0, h, 0},
 	})
-
-	bar := &Builder{}
-	bar.flatQuad(mgl32.Vec3{0, 0, 0}, mgl32.Vec3{1, 0, 0}, mgl32.Vec3{1, 1, 0}, mgl32.Vec3{0, 1, 0},
-		rgba(1, 1, 1, 1))
-	r.splashBar = upload(bar)
 
 	sp, err := gl.NewProgram(splashVS, splashFS)
 	if err != nil {
