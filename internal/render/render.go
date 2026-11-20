@@ -880,6 +880,15 @@ func (r *Renderer) drawHUD(vp mgl32.Mat4, hud mgl32.Mat4, g *game.Game, now floa
 	}
 }
 
+// textAdvance reports a line's width in the art pixels the splash is drawn in.
+func textAdvance(face []byte, text string, px int) float32 {
+	l, err := font.Render(face, text, px)
+	if err != nil {
+		return 0
+	}
+	return float32(l.W)
+}
+
 // alignMode selects where (x,y) sits on a text line.
 type alignMode int
 
@@ -892,13 +901,19 @@ const (
 // drawText draws one line whose top edge starts at y in the plane of base; x is
 // the left edge, the centre or the right edge depending on align.
 func (r *Renderer) drawText(vp, base mgl32.Mat4, x, y float32, px int, text string, align alignMode, col mgl32.Vec4) {
+	r.drawTextFace(vp, base, x, y, px, text, align, col, font.Embedded(), "t")
+}
+
+// drawTextFace is drawText with an explicit face: the GitHub mark lives in its
+// own glyph subset, so its texture cache entry needs a separate key prefix.
+func (r *Renderer) drawTextFace(vp, base mgl32.Mat4, x, y float32, px int, text string, align alignMode, col mgl32.Vec4, face []byte, tag string) {
 	if text == "" {
 		return
 	}
-	key := fmt.Sprintf("%s|%d", text, px)
+	key := fmt.Sprintf("%s|%s|%d", tag, text, px)
 	line := r.texts[key]
 	if line == nil {
-		l, err := font.Render(font.Embedded(), text, px)
+		l, err := font.Render(face, text, px)
 		if err != nil {
 			return
 		}

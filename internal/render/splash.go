@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-gl/mathgl/mgl32"
 
+	"zuma/internal/font"
 	"zuma/internal/game"
 	"zuma/internal/gl"
 	"zuma/internal/splashart"
@@ -186,11 +187,14 @@ func (r *Renderer) DrawSplash(vp, artWorld mgl32.Mat4, now float64) {
 		return artWorld.Mul4(mgl32.Translate3D(x, y, 6)).Mul4(mgl32.Scale3D(312.5, 312.5, 312.5))
 	}
 	r.drawText(vp, base(146, 890), 0, 0, 168, "祖玛 VR", alignLeft, rgba(1.0, 0.86, 0.54, 1))
-	r.drawText(vp, base(158, 668), 0, 0, 52, "球链神庙", alignLeft, rgba(0.55, 0.90, 0.84, 0.96))
-	// The prompt breathes so it reads as "waiting for you", not as a label.
-	pulse := 0.62 + 0.30*float32(math.Sin((now-s.start)*3.1))
-	r.drawText(vp, base(960, 210), 0, 0, 44, "按 空格 / 扳机 开始", alignCenter, rgba(0.95, 0.87, 0.62, pulse))
-	r.drawText(vp, base(1856, 64), 0, 0, 30, "github.com/lomoalbert", alignRight, rgba(0.66, 0.80, 0.84, 0.90))
+	// Bottom-right: the GitHub mark at the size of the text, then the repo.
+	const creditPX = 30
+	credit := rgba(0.66, 0.80, 0.84, 0.90)
+	repo := "lomoframe/zuma"
+	repoW := textAdvance(font.Embedded(), repo, creditPX)
+	iconX := 1856 - repoW - float32(creditPX)*0.55
+	r.drawTextFace(vp, base(iconX, 64), 0, 0, creditPX, "\uf09b", alignRight, credit, font.Icons(), "icon")
+	r.drawText(vp, base(1856, 64), 0, 0, creditPX, repo, alignRight, credit)
 
 	// Fade up when the screen appears, fade out once the player pressed start.
 	elapsed := now - s.start

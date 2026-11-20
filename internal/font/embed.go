@@ -10,5 +10,11 @@ import _ "embed"
 //go:embed SourceHanSansCN-Signs.otf
 var embeddedFace []byte
 
+//go:embed FontAwesome-GitHub.ttf
+var iconFace []byte
+
 // Embedded returns the bundled sign font data.
 func Embedded() []byte { return embeddedFace }
+
+// Icons returns the glyph subset holding U+F09B (the GitHub mark).
+func Icons() []byte { return iconFace }
