@@ -78,6 +78,48 @@ beam on purpose — the beam itself stops on the bead it will hit.
   same speed and arc as a normal shot — with a bang, and the next level loads a
   moment later.
 
+## Difficulty curve
+
+Every round is tuned by `game.SpecFor(level)`: three dials that grow linearly
+and then cap.
+
+| Level | Beads to clear | Colours | Chain speed (m/s) | Beads pre-laid |
+| --- | --- | --- | --- | --- |
+| 1 | 45 | 4 | 0.200 | 16 |
+| 2 | 53 | 4 | 0.222 | 18 |
+| 3 | 61 | 5 | 0.244 | 20 |
+| 4 | 69 | 5 | 0.266 | 22 |
+| 5 | 77 | 6 | 0.288 | 24 |
+| 6 | 85 | 6 | 0.310 | 26 |
+| 7 | 90 (cap) | 6 | 0.332 | 28 |
+| 8–15 | 90 | 6 | +0.022 per level | +2 per level |
+| 16+ | 90 | 6 | 0.52 (cap) | 45 (cap) |
+
+- **Beads** `45 + 8 × (level − 1)`, capped at 90.
+- **Colours** `4 + (level − 1) / 2`, capped at 6 — a new colour every two
+  levels, which is what actually makes matches harder to line up.
+- **Chain speed** `0.20 + 0.022 × (level − 1)` m/s, capped at 0.52, i.e. 2.6×
+  the opening pace.
+- **Beads pre-laid** `16 + 2 × (level − 1)`, never more than half the round's
+  beads: the board already carries a chain heading for the hole on the first
+  frame.
+
+What deliberately does **not** scale:
+
+- **Aiming and shooting** — 14.8 m/s with at most two beads in the air, at
+  every level.
+- **Geometry** — board shape and route family are rolled fresh every round from
+  the same weights and the same guard rails (route ≥ 7.2 m, non-adjacent
+  sections at least one bead apart, inside the felt). A late level is not a
+  longer or twistier course, just a busier one.
+- **Combo recoil** — one shared impulse curve, capped at 9 m/s whatever the
+  level.
+- **Scoring** — `10 × beads × combo` per pop, plus `150 × level` for clearing.
+
+Beads sit 0.124 m apart, so a route holds roughly 58–113 of them. At the
+90-bead cap that makes a short route noticeably harder than a long one: late
+rounds vary with the layout roll as well as with the level.
+
 ## Build and run
 
 Dependencies (Arch names): `glfw`, `glew`, `openal`, `openvr`, `go`. For the
@@ -162,6 +204,13 @@ changing any on-screen text.
 - 规则：线路/盘形每关随机（单线螺旋、最多两层环、迷宫/圆弧发卡、波浪发卡、
   方形螺旋、一笔画轮廓），洞口位置随机；插入按命中侧、三消、**连击按每发计**、
   缺口由靠洞口一侧回退合拢、击退随连击级别加重；手上只发链上还有的颜色。
+- 难度曲线：只靠三个线性增长的参数（`game.SpecFor`）——要清的球数
+  `45 + 8×(关-1)`（上限 90）、颜色数 `4 + (关-1)/2`（上限 6，每两关多一色）、
+  链速 `0.20 + 0.022×(关-1)` m/s（上限 0.52），外加开局已铺的球数
+  `16 + 2×(关-1)`（不超过本关球数的一半）。射击手感（14.8 m/s、最多两颗在飞）、
+  盘形与线路（每关同权重重抽、守门条件不变）、连击击退都不随关卡变化，所以
+  第 7 关球数、第 5 关颜色、第 16 关链速到顶之后曲线是平的，后段难度更多来自
+  随机盘面的运气（线路越短、越早被填满）。
 - 全部资源程序化生成（网格、凹槽、盘形、标题页海报、字体子集、音效），
   只有一个可执行文件。
 
