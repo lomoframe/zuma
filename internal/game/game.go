@@ -136,6 +136,9 @@ type Game struct {
 	// their logical position while an insertion settles.
 	pushFrom int
 	push     float32
+	// KnockVel is the chain's recoil velocity (m/s, negative = away from the
+	// hole). Combos add an impulse; friction brings it back to rest.
+	KnockVel float32
 
 	// pendingAhead is the ID of the ball that sits just ahead of a gap left by a
 	// match. When the tail catches up, the junction may pop again.
@@ -183,6 +186,7 @@ func (g *Game) startLevel() {
 	g.stateT = 0
 	g.loseT = 0
 	g.Flash = 0
+	g.KnockVel = 0
 
 	prefill := 16 + 2*(g.Level-1)
 	if prefill > spec.Balls/2 {
@@ -408,6 +412,27 @@ func (g *Game) stepChain(dt float32) {
 		v = suckSpeed
 	} else if g.State != StatePlaying {
 		v = 0
+	}
+
+	// Knockback: the whole chain shares one recoil velocity. The entrance
+	// acts like a wall, so the tail cannot be pushed past s=0.
+	if g.KnockVel != 0 && g.State == StatePlaying {
+		shift := g.KnockVel * dt
+		if shift < 0 {
+			if minShift := -g.Balls[len(g.Balls)-1].S; shift < minShift {
+				shift = minShift
+				g.KnockVel = 0
+			}
+		}
+		for i := range g.Balls {
+			g.Balls[i].S += shift
+		}
+		g.KnockVel *= float32(math.Exp(-6.0 * float64(dt)))
+		if g.KnockVel > -0.02 && g.KnockVel < 0.02 {
+			g.KnockVel = 0
+		}
+	} else if g.State != StatePlaying {
+		g.KnockVel = 0
 	}
 
 	// Find the first gap in the chain.
@@ -643,17 +668,12 @@ func (g *Game) matchAt(idx int) {
 	g.Score += gain
 	g.Events = append(g.Events, Event{Kind: EventMatch, Value: mult})
 	g.Flash = 1
-	// A combo knocks the whole chain back, away from the hole.
+	// A combo converts into a backwards impulse; the chain slides back with
+	// friction instead of teleporting.
 	if g.Combo >= 2 {
-		knock := float32(g.Combo) * 0.10
-		if knock > 0.7 {
-			knock = 0.7
-		}
-		for i := range g.Balls {
-			g.Balls[i].S -= knock
-			if g.Balls[i].S < 0 {
-				g.Balls[i].S = 0
-			}
+		g.KnockVel -= 0.9 * float32(g.Combo)
+		if g.KnockVel < -3.5 {
+			g.KnockVel = -3.5
 		}
 	}
 	mid := g.Path.PointAt((g.Balls[lo].S + g.Balls[hi].S) / 2)

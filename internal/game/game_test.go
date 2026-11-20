@@ -226,3 +226,55 @@ func TestDemoStateLetsScreenshotsShowOverlays(t *testing.T) {
 		t.Fatalf("won state not set")
 	}
 }
+
+func TestComboKnockbackIsAnimated(t *testing.T) {
+	g := New(1)
+	g.Queue = nil
+	g.Shots = nil
+	g.Balls = []Ball{
+		{S: 5.000, Color: 0, ID: 1},
+		{S: 4.876, Color: 0, ID: 2},
+		{S: 4.752, Color: 0, ID: 3},
+		{S: 4.628, Color: 1, ID: 4},
+	}
+	g.Combo = 1
+	g.comboT = 1 // a second match inside the window: combo becomes 2
+	g.matchAt(0)
+	if g.KnockVel >= 0 {
+		t.Fatalf("combo did not add a backwards impulse: %v", g.KnockVel)
+	}
+	s0 := g.Balls[0].S
+	g.stepChain(1.0 / 60.0)
+	if g.Balls[0].S >= s0 {
+		t.Fatalf("chain did not recoil: %.4f -> %.4f", s0, g.Balls[0].S)
+	}
+	v0 := g.KnockVel
+	g.stepChain(1.0 / 60.0)
+	if g.KnockVel <= v0 {
+		t.Fatalf("recoil did not decay: %.4f -> %.4f", v0, g.KnockVel)
+	}
+	// Friction must settle it instead of sliding forever.
+	for i := 0; i < 300; i++ {
+		g.stepChain(1.0 / 60.0)
+	}
+	if g.KnockVel != 0 {
+		t.Fatalf("recoil never settled: %v", g.KnockVel)
+	}
+}
+
+func TestKnockbackStopsAtEntrance(t *testing.T) {
+	g := New(1)
+	g.Queue = nil
+	g.Shots = nil
+	g.Balls = []Ball{{S: 0.05, Color: 0, ID: 1}}
+	g.KnockVel = -3
+	for i := 0; i < 120; i++ {
+		g.stepChain(1.0 / 60.0)
+	}
+	if g.Balls[0].S < 0 {
+		t.Fatalf("chain pushed past the entrance: %v", g.Balls[0].S)
+	}
+	if g.KnockVel != 0 {
+		t.Fatalf("recoil should stop at the wall, got %v", g.KnockVel)
+	}
+}
