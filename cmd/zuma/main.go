@@ -699,7 +699,7 @@ func (a *app) pressFire(now float64) {
 	switch {
 	case a.g.State == game.StateWon:
 		if a.winAdvanceAt == 0 {
-			a.g.LaunchBurst(a.aimO, a.aimD, 30)
+			a.g.DryVolley(a.aimO, a.aimD, 30)
 			audio.Play(audio.Firework, 1.0)
 			a.winAdvanceAt = now + 1.2
 		}

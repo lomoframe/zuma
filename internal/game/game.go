@@ -157,7 +157,6 @@ type Game struct {
 	nextID       int
 
 	Popups []Popup
-	Sparks []Spark
 	Events []Event
 
 	stateT float32
@@ -289,30 +288,13 @@ func (g *Game) pickColor(n int) int {
 	return g.randColor(n)
 }
 
-// Spark is a celebration bead thrown from the launcher on the win screen. It is
-// purely visual: no collisions, no chain interaction.
-type Spark struct {
-	Pos, Vel mgl32.Vec3
-	Colour   int
-	Age      float32
-}
+// volleySpread is the half-angle of the celebration cone.
+const volleySpread = 20.0 * math.Pi / 180.0
 
-const (
-	sparkLife    = 1.0
-	sparkSpread  = 20.0 * math.Pi / 180.0 // half-angle of the cone
-	sparkSpeedLo = 3.0
-	sparkSpeedHi = 4.4
-	// Board units are already metres; the felt is small, so the burst pulls
-	// down much more gently than real gravity would.
-	sparkGravity = 3.2
-)
-
-// SparkLife is how long one celebration bead stays alive, in seconds.
-const SparkLife = sparkLife
-
-// LaunchBurst throws n beads from o in a 20° cone around d, cycling through
-// every palette colour so all of them show up.
-func (g *Game) LaunchBurst(o, d mgl32.Vec3, n int) {
+// DryVolley fires n ordinary beads from o in a 20° cone around d. They are
+// plain shots — same speed, same arc, same rules as one the player fires —
+// cycling through every palette colour so the whole set shows up.
+func (g *Game) DryVolley(o, d mgl32.Vec3, n int) {
 	if n <= 0 || d.Len() < 1e-4 {
 		return
 	}
@@ -323,17 +305,16 @@ func (g *Game) LaunchBurst(o, d mgl32.Vec3, n int) {
 	}
 	u := d.Cross(up).Normalize()
 	v := d.Cross(u).Normalize()
-	tan := float32(math.Tan(sparkSpread))
+	tan := float32(math.Tan(volleySpread))
 	for i := 0; i < n; i++ {
 		ang := g.Rng.Float32() * 2 * math.Pi
 		rad := float32(math.Sqrt(float64(g.Rng.Float32()))) * tan
 		dir := d.Add(u.Mul(rad * float32(math.Cos(float64(ang))))).
 			Add(v.Mul(rad * float32(math.Sin(float64(ang))))).Normalize()
-		speed := sparkSpeedLo + g.Rng.Float32()*(sparkSpeedHi-sparkSpeedLo)
-		g.Sparks = append(g.Sparks, Spark{
-			Pos:    o,
-			Vel:    dir.Mul(speed),
-			Colour: i % len(Palette),
+		g.Shots = append(g.Shots, Shot{
+			Pos:   o.Add(dir.Mul(0.06)),
+			Vel:   dir.Mul(shotSpeed),
+			Color: i % len(Palette),
 		})
 	}
 }
@@ -466,35 +447,12 @@ func (g *Game) Update(dt float32) {
 	}
 	g.Popups = keep
 
-	for i := range g.Sparks {
-		sp := &g.Sparks[i]
-		sp.Age += dt
-		sp.Vel[1] -= sparkGravity * dt
-		sp.Pos = sp.Pos.Add(sp.Vel.Mul(dt))
-		// They bounce off the felt instead of sinking through it, so the
-		// popper's beads end up scattered across the table.
-		if sp.Pos[1] < BallR && sp.Vel[1] < 0 {
-			sp.Pos[1] = BallR
-			sp.Vel[1] = -sp.Vel[1] * 0.45
-			sp.Vel[0] *= 0.72
-			sp.Vel[2] *= 0.72
-		}
-	}
-	if len(g.Sparks) > 0 {
-		keep := g.Sparks[:0]
-		for _, sp := range g.Sparks {
-			if sp.Age < sparkLife {
-				keep = append(keep, sp)
-			}
-		}
-		g.Sparks = keep
-	}
-
 	switch g.State {
 	case StateWon:
 		// The player presses fire to move on; Update only keeps the overlay
-		// animation running.
+		// and the celebration volley running.
 		g.stateT += dt
+		g.moveShots(dt)
 		return
 	case StateLost:
 		g.loseT += dt

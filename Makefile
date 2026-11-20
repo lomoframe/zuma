@@ -26,7 +26,7 @@ shot: build
 	./$(BIN) -desktop -screenshot docs/vr-hero.png -frames 700 -seed 9 -vrcam -title=false
 
 win: build
-	./$(BIN) -desktop -screenshot docs/vr-win.png -frames 40 -seed 9 -vrcam -title=false -demo won -fire
+	./$(BIN) -desktop -screenshot docs/vr-win.png -frames 14 -seed 9 -vrcam -title=false -demo won -fire
 
 lose: build
 	./$(BIN) -desktop -screenshot docs/vr-lose.png -frames 200 -seed 9 -vrcam -title=false -demo lost
