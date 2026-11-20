@@ -208,6 +208,7 @@ type Renderer struct {
 	ball     *Mesh
 	ring     *Mesh
 	beam     *Mesh
+	seam     *Mesh
 	hand     *Mesh
 	handName string
 	quad     *textQuad
@@ -245,6 +246,7 @@ func New() (*Renderer, error) {
 	r.ball = upload(buildBall())
 	r.ring = upload(buildRing())
 	r.beam = upload(buildBeam())
+	r.seam = upload(buildSeam())
 	r.quad = newTextQuad()
 	return r, nil
 }
@@ -276,6 +278,18 @@ func buildBeam() *Builder {
 		b.tri(a, e, c)
 		b.tri(a, d, e)
 	}
+	return b
+}
+
+// buildSeam is a flat unit quad in XZ: x across the groove, z along it.
+func buildSeam() *Builder {
+	b := &Builder{}
+	n := mgl32.Vec3{0, 1, 0}
+	a := b.vertex(mgl32.Vec3{-0.5, 0, -0.5}, n, rgba(1, 1, 1, 1))
+	c := b.vertex(mgl32.Vec3{0.5, 0, -0.5}, n, rgba(1, 1, 1, 1))
+	d := b.vertex(mgl32.Vec3{0.5, 0, 0.5}, n, rgba(1, 1, 1, 1))
+	e := b.vertex(mgl32.Vec3{-0.5, 0, 0.5}, n, rgba(1, 1, 1, 1))
+	b.quad(a, c, d, e)
 	return b
 }
 
@@ -524,11 +538,19 @@ func (r *Renderer) drawRing(world mgl32.Mat4, at mgl32.Vec2, radius float32, col
 	r.ring.draw()
 }
 
-// aimEnd returns where the aiming ray first meets a bead or the board.
-func (r *Renderer) aimEnd(g *game.Game, o, d mgl32.Vec3) mgl32.Vec3 {
-	end := o.Add(d.Mul(2.6))
+// seamMark is the gap a shot would be inserted into.
+type seamMark struct {
+	pos mgl32.Vec3
+	tan mgl32.Vec2
+}
+
+// aimTarget returns where the beam ends and, when it meets the chain, the seam
+// between the two beads the shot would be inserted between.
+func (r *Renderer) aimTarget(g *game.Game, o, d mgl32.Vec3) (mgl32.Vec3, seamMark, bool) {
 	bestT := float32(1e9)
-	for _, b := range g.Balls {
+	bestIdx := -1
+	var hit mgl32.Vec3
+	for i, b := range g.Balls {
 		q := g.Path.PointAt(b.S)
 		c := mgl32.Vec3{q.X(), game.BallR, q.Y()}
 		oc := o.Sub(c)
@@ -541,27 +563,61 @@ func (r *Renderer) aimEnd(g *game.Game, o, d mgl32.Vec3) mgl32.Vec3 {
 		t := -bq - float32(math.Sqrt(float64(disc)))
 		if t > 0.03 && t < bestT {
 			bestT = t
-			end = o.Add(d.Mul(t))
+			bestIdx = i
+			hit = o.Add(d.Mul(t))
 		}
 	}
-	if bestT < 1e8 {
-		return end
-	}
-	if d.Y() < -0.01 {
-		t := (0.02 - o.Y()) / d.Y()
-		if t > 0.03 && t < 3.0 {
-			end = o.Add(d.Mul(t))
+	if bestIdx < 0 {
+		end := o.Add(d.Mul(2.6))
+		if d.Y() < -0.01 {
+			if t := (0.02 - o.Y()) / d.Y(); t > 0.03 && t < 3.0 {
+				end = o.Add(d.Mul(t))
+			}
 		}
+		return end, seamMark{}, false
 	}
-	return end
+
+	s := g.Balls[bestIdx].S
+	ball := g.Path.PointAt(s)
+	_, tan := g.Path.At(s)
+	ahead := (mgl32.Vec2{hit.X() - ball.X(), hit.Z() - ball.Y()}).Dot(tan) > 0
+	seamS := s + game.Diam*0.5
+	if ahead {
+		seamS = s - game.Diam*0.5
+		if bestIdx > 0 {
+			seamS = (s + g.Balls[bestIdx-1].S) * 0.5
+		}
+	} else if bestIdx+1 < len(g.Balls) {
+		seamS = (s + g.Balls[bestIdx+1].S) * 0.5
+	}
+	p := g.Path.PointAt(seamS)
+	end := mgl32.Vec3{p.X(), game.BallR, p.Y()}
+	return end, seamMark{pos: end, tan: tan}, true
+}
+
+// drawSeam draws a bright band across the groove at the insertion gap.
+func (r *Renderer) drawSeam(world mgl32.Mat4, m seamMark) {
+	yaw := float32(math.Atan2(float64(m.tan.X()), float64(m.tan.Y())))
+	model := world.
+		Mul4(mgl32.Translate3D(m.pos.X(), game.BallR+0.004, m.pos.Z())).
+		Mul4(mgl32.HomogRotate3DY(yaw)).
+		Mul4(mgl32.Scale3D(game.Diam*1.9, 1, game.Diam*0.16))
+	r.meshProg.Mat4(r.uModel, model)
+	r.meshProg.Vec4(r.uTint, 0.55, 1.0, 1.0, 0.95)
+	r.meshProg.Float(r.uGloss, 0)
+	r.meshProg.Float(r.uUnlit, 1)
+	r.seam.draw()
+	r.meshProg.Float(r.uUnlit, 0)
 }
 
 // drawHand draws the aiming beam, its reticle, and the loaded and next beads
 // floating at the controller.
 func (r *Renderer) drawHand(world mgl32.Mat4, g *game.Game, o, d mgl32.Vec3, now float64) {
-	end := r.aimEnd(g, o, d)
+	end, seam, hit := r.aimTarget(g, o, d)
 	r.drawBeam(world, o, end)
-	r.drawRingAt(world, end, 0.035, rgba(0.40, 0.95, 1.0, 0.9))
+	if hit {
+		r.drawSeam(world, seam)
+	}
 
 	// Loaded bead at the muzzle, the spare just below it.
 	r.drawBallWorld(world, o.Add(d.Mul(0.10)), game.BallR, g.Loaded, now)

@@ -13,7 +13,7 @@ const (
 	BallR float32 = 0.062
 	Diam  float32 = 2 * BallR
 
-	shotSpeed  float32 = 7.4
+	shotSpeed  float32 = 14.8
 	maxInAir           = 2
 	suckSpeed  float32 = 4.0
 	holesInset float32 = 0.0
