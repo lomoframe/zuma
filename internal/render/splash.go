@@ -193,7 +193,12 @@ func (r *Renderer) DrawSplash(vp, artWorld mgl32.Mat4, now float64) {
 	repo := "lomoframe/zuma"
 	repoW := textAdvance(font.Embedded(), repo, creditPX)
 	iconX := 1856 - repoW - float32(creditPX)*0.55
-	r.drawTextFace(vp, base(iconX, 64), 0, 0, creditPX, "\uf09b", alignRight, credit, font.Icons(), "icon")
+	// The octocat's glyph box is taller than the latin one; drop the icon by
+	// half the difference so both sit on the same visual centre line.
+	tl, _ := font.Render(font.Embedded(), repo, creditPX)
+	il, _ := font.Render(font.Icons(), "\uf09b", creditPX)
+	iconDY := float32(il.H-tl.H) * 0.0032
+	r.drawTextFace(vp, base(iconX, 64), 0, iconDY, creditPX, "\uf09b", alignRight, credit, font.Icons(), "icon")
 	r.drawText(vp, base(1856, 64), 0, 0, creditPX, repo, alignRight, credit)
 
 	// Fade up when the screen appears, fade out once the player pressed start.
