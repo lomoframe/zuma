@@ -36,7 +36,9 @@ uniform mat4 uModel;
 out vec3 vNrm;
 out vec3 vWorld;
 out vec4 vCol;
+out vec3 vLocal;
 void main() {
+        vLocal = aPos;
         vec4 w = uModel * vec4(aPos, 1.0);
         vWorld = w.xyz;
         vNrm = mat3(uModel) * aNrm;
@@ -48,6 +50,9 @@ const meshFS = `#version 410 core
 in vec3 vNrm;
 in vec3 vWorld;
 in vec4 vCol;
+in vec3 vLocal;
+uniform float uRoll;
+uniform float uBall;
 uniform vec4 uTint;
 uniform vec3 uCam;
 uniform float uGloss;
@@ -57,6 +62,16 @@ void main() {
         vec3 n = normalize(vNrm);
         vec3 L = normalize(vec3(0.38, 0.88, 0.30));
         vec3 base = vCol.rgb * uTint.rgb;
+        if (uBall > 0.5) {
+                // Two dark meridians plus a faint speckle; rotating them is the
+                // rolling cue.
+                float c = cos(uRoll), sn = sin(uRoll);
+                vec3 p = vec3(vLocal.x, vLocal.y * c - vLocal.z * sn, vLocal.y * sn + vLocal.z * c);
+                float lon = atan(p.z, p.x);
+                float seam = abs(fract(lon / 3.14159265 + 0.5) - 0.5);
+                base *= mix(0.58, 1.0, smoothstep(0.05, 0.115, seam));
+                base *= 0.93 + 0.07 * sin(11.0 * p.y + 5.0 * lon);
+        }
         if (uUnlit > 0.5) {
                 frag = vec4(base, vCol.a * uTint.a);
                 return;
@@ -200,8 +215,8 @@ type Renderer struct {
 	meshProg gl.Program
 	textProg gl.Program
 
-	uVP, uModel, uTint, uCam, uGloss, uUnlit int32
-	uMVP, uTex, uColor                       int32
+	uVP, uModel, uTint, uCam, uGloss, uUnlit, uRoll, uBall int32
+	uMVP, uTex, uColor                                     int32
 
 	board    *Mesh
 	path     *game.Path
@@ -247,6 +262,8 @@ func New() (*Renderer, error) {
 		uCam:     mp.Loc("uCam"),
 		uGloss:   mp.Loc("uGloss"),
 		uUnlit:   mp.Loc("uUnlit"),
+		uRoll:    mp.Loc("uRoll"),
+		uBall:    mp.Loc("uBall"),
 		uMVP:     tp.Loc("uMVP"),
 		uTex:     tp.Loc("uTex"),
 		uColor:   tp.Loc("uColor"),
@@ -466,6 +483,8 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 	gl.Enable(gl.CullFace)
 	gl.CullFaceMode(gl.Back)
 
+	r.meshProg.Float(r.uBall, 0)
+	r.meshProg.Float(r.uRoll, 0)
 	r.meshProg.Mat4(r.uModel, world)
 	r.meshProg.Vec4(r.uTint, 1, 1, 1, 1)
 	r.meshProg.Float(r.uGloss, 0.25)
@@ -479,13 +498,24 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 			s -= g.Push()
 		}
 		pos := g.Path.PointAt(s)
+		radius := game.BallR
+		if bd.InsertAnim > 0 {
+			// Slide the fresh bead from the point it struck into its slot.
+			t := 1 - bd.InsertAnim/game.InsertAnimTime
+			t = 1 - (1-t)*(1-t)
+			pos = bd.From.Add(pos.Sub(bd.From).Mul(t))
+			radius = game.BallR * (1 + 0.35*(1-t))
+		}
 		model := world.
 			Mul4(mgl32.Translate3D(pos.X(), game.BallR, pos.Y())).
-			Mul4(mgl32.Scale3D(game.BallR, game.BallR, game.BallR))
+			Mul4(mgl32.Scale3D(radius, radius, radius))
 		c := ballColor(bd.Color)
 		r.meshProg.Mat4(r.uModel, model)
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
+		r.meshProg.Float(r.uBall, 1)
+		r.meshProg.Float(r.uRoll, -bd.S/game.BallR)
 		r.ball.draw()
+		r.meshProg.Float(r.uBall, 0)
 	}
 
 	// Balls in the air.
@@ -497,7 +527,10 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		c := ballColor(sh.Color)
 		r.meshProg.Mat4(r.uModel, model)
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
+		r.meshProg.Float(r.uBall, 1)
+		r.meshProg.Float(r.uRoll, -float32(now)*40)
 		r.ball.draw()
+		r.meshProg.Float(r.uBall, 0)
 	}
 
 	if handOK {
@@ -688,7 +721,10 @@ func (r *Renderer) drawBallWorld(world mgl32.Mat4, at mgl32.Vec3, radius float32
 	r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
 	r.meshProg.Float(r.uGloss, 1.2)
 	r.meshProg.Float(r.uUnlit, 0)
+	r.meshProg.Float(r.uBall, 1)
+	r.meshProg.Float(r.uRoll, float32(phase)*2.0)
 	r.ball.draw()
+	r.meshProg.Float(r.uBall, 0)
 }
 
 // drawHUD lays the score plaque above the far rim.

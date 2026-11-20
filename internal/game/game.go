@@ -47,7 +47,15 @@ type Ball struct {
 	S     float32
 	Color int
 	ID    int
+
+	// InsertAnim counts down while a freshly inserted bead slides from the
+	// point it struck into its slot.
+	InsertAnim float32
+	From       mgl32.Vec2
 }
+
+// InsertAnimTime is how long a bead takes to slide into the chain.
+const InsertAnimTime float32 = 0.13
 
 // Shot is a ball in flight: the player's controller fires it into the board,
 // so it travels in three dimensions until it meets a bead.
@@ -139,6 +147,9 @@ type Game struct {
 	// KnockVel is the chain's recoil velocity (m/s, negative = away from the
 	// hole). Combos add an impulse; friction brings it back to rest.
 	KnockVel float32
+	// pendingKnock is a combo impulse waiting for the split chain's two halves
+	// to collide before it is applied.
+	pendingKnock float32
 
 	// pendingAhead is the ID of the ball that sits just ahead of a gap left by a
 	// match. When the tail catches up, the junction may pop again.
@@ -187,6 +198,7 @@ func (g *Game) startLevel() {
 	g.loseT = 0
 	g.Flash = 0
 	g.KnockVel = 0
+	g.pendingKnock = 0
 
 	prefill := 16 + 2*(g.Level-1)
 	if prefill > spec.Balls/2 {
@@ -333,6 +345,14 @@ func (g *Game) Update(dt float32) {
 	}
 	if g.Flash > 0 {
 		g.Flash -= dt * 2.2
+	}
+	for i := range g.Balls {
+		if g.Balls[i].InsertAnim > 0 {
+			g.Balls[i].InsertAnim -= dt
+			if g.Balls[i].InsertAnim < 0 {
+				g.Balls[i].InsertAnim = 0
+			}
+		}
 	}
 	for i := range g.Popups {
 		g.Popups[i].Life -= dt
@@ -506,6 +526,14 @@ func (g *Game) stepChain(dt float32) {
 		} else if idx+1 < len(g.Balls) {
 			if g.Balls[idx].S-g.Balls[idx+1].S <= Diam*1.03 {
 				g.pendingAhead = -1
+				// The two halves have collided: now the combo knockback lands.
+				if g.pendingKnock > 0 {
+					g.KnockVel -= g.pendingKnock
+					if g.KnockVel < -3.5 {
+						g.KnockVel = -3.5
+					}
+					g.pendingKnock = 0
+				}
 				g.matchAt(idx)
 			}
 		} else {
@@ -609,7 +637,7 @@ func (g *Game) insert(hitPos mgl32.Vec3, k int, color int) {
 		if newS > g.Path.Len-0.015 {
 			j = 1
 		} else {
-			nb := Ball{S: newS, Color: color, ID: g.nextID}
+			nb := Ball{S: newS, Color: color, ID: g.nextID, InsertAnim: InsertAnimTime, From: mgl32.Vec2{hit2.X(), hit2.Y()}}
 			g.nextID++
 			g.Balls = append([]Ball{nb}, g.Balls...)
 			g.pushFrom, g.push = -1, 0
@@ -625,7 +653,7 @@ func (g *Game) insert(hitPos mgl32.Vec3, k int, color int) {
 				g.Balls[i].S = 0
 			}
 		}
-		nb := Ball{S: prevS - Diam, Color: color, ID: g.nextID}
+		nb := Ball{S: prevS - Diam, Color: color, ID: g.nextID, InsertAnim: InsertAnimTime, From: mgl32.Vec2{hit2.X(), hit2.Y()}}
 		g.nextID++
 		g.Balls = append(g.Balls, Ball{})
 		copy(g.Balls[j+1:], g.Balls[j:])
@@ -668,14 +696,6 @@ func (g *Game) matchAt(idx int) {
 	g.Score += gain
 	g.Events = append(g.Events, Event{Kind: EventMatch, Value: mult})
 	g.Flash = 1
-	// A combo converts into a backwards impulse; the chain slides back with
-	// friction instead of teleporting.
-	if g.Combo >= 2 {
-		g.KnockVel -= 0.9 * float32(g.Combo)
-		if g.KnockVel < -3.5 {
-			g.KnockVel = -3.5
-		}
-	}
 	mid := g.Path.PointAt((g.Balls[lo].S + g.Balls[hi].S) / 2)
 	g.Popups = append(g.Popups, Popup{
 		Pos:  mid,
@@ -695,6 +715,19 @@ func (g *Game) matchAt(idx int) {
 	}
 	copy(g.Balls[lo:], g.Balls[hi+1:])
 	g.Balls = g.Balls[:len(g.Balls)-(hi-lo+1)]
+	// The combo impulse is held until the front and rear halves meet again;
+	// if the pop touched an end of the chain there is no collision to wait for.
+	if g.Combo >= 2 {
+		impulse := 0.9 * float32(g.Combo)
+		if lo > 0 && lo < len(g.Balls) {
+			g.pendingKnock += impulse
+		} else {
+			g.KnockVel -= impulse
+			if g.KnockVel < -3.5 {
+				g.KnockVel = -3.5
+			}
+		}
+	}
 	if lo > 0 && lo < len(g.Balls) && aheadID >= 0 {
 		g.pendingAhead = aheadID
 	} else {
