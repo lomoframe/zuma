@@ -32,6 +32,8 @@ type app struct {
 	eyes        [2]*gl.RenderTarget
 	board       mgl32.Mat4
 	boardInv    mgl32.Mat4
+	tableWorld  mgl32.Mat4
+	tilt        mgl32.Mat4
 	prevTrig    bool
 	vrAimOK     bool
 	vrAim       mgl32.Vec2
@@ -78,6 +80,10 @@ const (
 	vrBoardY     = 0.86
 	vrBoardZ     = -1.55
 	vrBoardScale = 0.55
+	// The playfield leans toward the player: the near edge stays on the table
+	// and the far edge rises, like a pinball table.
+	boardTiltDeg = 30
+	boardHingeZ  = 1.55
 )
 
 func main() {
@@ -96,8 +102,8 @@ func main() {
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
 	demo := flag.String("demo", "", "screenshot helper: \"won\" or \"lost\" shows the overlay")
 	yaw := flag.Float64("yaw", 0, "desktop camera yaw in radians")
-	pitch := flag.Float64("pitch", 0.70, "desktop camera pitch in radians")
-	dist := flag.Float64("dist", 4.6, "desktop camera distance in metres")
+	pitch := flag.Float64("pitch", 0.60, "desktop camera pitch in radians")
+	dist := flag.Float64("dist", 6.2, "desktop camera distance in metres")
 	flag.Bool("hud-debug", false, "print text quad sizes")
 	flag.Parse()
 	render.SetTextDebug(flag.Lookup("hud-debug").Value.String() == "true")
@@ -138,11 +144,16 @@ func main() {
 	}
 
 	a := &app{
-		g:     game.New(*seed),
-		r:     renderer,
-		cam:   camera{yaw: *yaw, pitch: *pitch, dist: *dist},
-		board: mgl32.Translate3D(0, vrBoardY, vrBoardZ).Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale)),
+		g:   game.New(*seed),
+		r:   renderer,
+		cam: camera{yaw: *yaw, pitch: *pitch, dist: *dist},
 	}
+	a.tableWorld = mgl32.Translate3D(0, vrBoardY, vrBoardZ).Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
+	tilt := mgl32.Translate3D(0, 0, boardHingeZ).
+		Mul4(mgl32.HomogRotate3DX(mgl32.DegToRad(boardTiltDeg))).
+		Mul4(mgl32.Translate3D(0, 0, -boardHingeZ))
+	a.tilt = tilt
+	a.board = a.tableWorld.Mul4(tilt)
 	a.boardInv = a.board.Inv()
 
 	a.vrDebug = *vrDebug
@@ -344,7 +355,7 @@ func cameraVP(cam camera, w, h int) (mgl32.Mat4, mgl32.Vec3) {
 	if w == 0 || h == 0 {
 		w, h = 1, 1
 	}
-	target := mgl32.Vec3{0, 0.26, -0.02}
+	target := mgl32.Vec3{0, 0.90, -0.15}
 	cp := math.Cos(cam.pitch)
 	eye := mgl32.Vec3{
 		target[0] + float32(cam.dist*cp*math.Sin(cam.yaw)),
@@ -362,7 +373,8 @@ func (a *app) renderDesktop(now float64) {
 	w, h := currentWindow.GetFramebufferSize()
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
-	a.r.Draw(vp, eye, mgl32.Ident4(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+	a.r.DrawStatic(vp, mgl32.Ident4())
+	a.r.Draw(vp, eye, a.tilt, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
 func (a *app) renderMirror(now float64) {
@@ -378,6 +390,7 @@ func (a *app) renderMirror(now float64) {
 	gl.BindFramebuffer(0)
 	gl.Viewport(0, 0, int32(w), int32(h))
 	clearScene()
+	a.r.DrawStatic(proj.Mul4(view), a.tableWorld)
 	a.r.Draw(proj.Mul4(view), cam, a.board, a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 }
 
@@ -444,17 +457,24 @@ func (a *app) updateMouseAim(win *glfw.Window) {
 	py := cy * float64(fh) / float64(wh)
 	ndcX := float32(2*px/float64(fw) - 1)
 	ndcY := float32(1 - 2*py/float64(fh))
-	p, ok := rayPlane(vp.Inv(), ndcX, ndcY, 0.02)
-	if !ok {
+	inv := vp.Inv()
+	na := inv.Mul4x1(mgl32.Vec4{ndcX, ndcY, -1, 1})
+	nb := inv.Mul4x1(mgl32.Vec4{ndcX, ndcY, 1, 1})
+	if na[3] == 0 || nb[3] == 0 {
 		return
 	}
-	d := p.Sub(eye)
+	pa := mgl32.Vec3{na[0] / na[3], na[1] / na[3], na[2] / na[3]}
+	pb := mgl32.Vec3{nb[0] / nb[3], nb[1] / nb[3], nb[2] / nb[3]}
+	d := pb.Sub(pa)
 	if d.Len() < 0.1 {
 		return
 	}
 	d = d.Normalize()
-	a.aimO = eye.Add(d.Mul(0.55))
-	a.aimD = d
+	// The playfield is tilted, so work the ray in its own space.
+	bo, bd := a.boardRay(pa, d)
+	_ = eye
+	a.aimO = bo.Add(bd.Mul(0.55))
+	a.aimD = bd
 	a.aimOK = true
 }
 

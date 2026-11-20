@@ -226,6 +226,7 @@ type Renderer struct {
 	uMVP, uTex, uColor                              int32
 
 	board    *Mesh
+	table    *Mesh
 	path     *game.Path
 	frog     *Mesh
 	ball     *Mesh
@@ -280,6 +281,18 @@ func randomBallRot(id int) mgl32.Mat3 {
 	return rotAxis(ax, float32(h%628)/100)
 }
 
+// DrawStatic draws the table, which does not tilt with the playfield.
+func (r *Renderer) DrawStatic(vp, world mgl32.Mat4) {
+	r.meshProg.Bind()
+	r.meshProg.Mat4(r.uVP, vp)
+	r.meshProg.Mat4(r.uModel, world)
+	r.meshProg.Vec4(r.uTint, 1, 1, 1, 1)
+	r.meshProg.Float(r.uGloss, 0.25)
+	r.meshProg.Float(r.uUnlit, 0)
+	r.meshProg.Float(r.uBall, 0)
+	r.table.draw()
+}
+
 // SetPath rebuilds the board geometry when a level's spiral changes. The old
 // mesh is left to the driver; a session only builds a handful of boards.
 func (r *Renderer) SetPath(p *game.Path) {
@@ -318,6 +331,7 @@ func New() (*Renderer, error) {
 		texts:    map[string]*textTex{},
 	}
 	r.SetPath(game.NewPathForBoard())
+	r.table = upload(buildTable())
 	r.frog = upload(buildFrog())
 	r.ball = upload(buildBall())
 	r.ring = upload(buildRing())
@@ -375,7 +389,19 @@ func buildRing() *Builder {
 	return b
 }
 
-// buildBoard lays out the table: wooden disc, felt, the spiral groove, the
+// buildTable is the table the playfield sits on. It is drawn upright even when
+// the playfield itself is tilted.
+func buildTable() *Builder {
+	b := &Builder{}
+	const seg = 96
+	table := rgba(0.115, 0.080, 0.062, 1)
+	b.disc(0, 0, 2.30, -0.135, rgba(0.05, 0.035, 0.028, 1), seg, false)
+	b.cylinder(0, 0, 2.30, -0.135, -0.10, table, seg)
+	b.disc(0, 0, 2.30, -0.10, table, seg, true)
+	return b
+}
+
+// buildBoard lays out the playfield: wooden disc, felt, the spiral groove, the
 // entry mouth, the hole and the score plaque.
 func buildBoard(path *game.Path) *Builder {
 	b := &Builder{}
@@ -388,12 +414,6 @@ func buildBoard(path *game.Path) *Builder {
 	panel := rgba(0.055, 0.075, 0.095, 1)
 
 	const seg = 96
-	// The table the board sits on, so it does not float in space.
-	table := rgba(0.115, 0.080, 0.062, 1)
-	b.disc(0, 0, 2.30, -0.135, rgba(0.05, 0.035, 0.028, 1), seg, false)
-	b.cylinder(0, 0, 2.30, -0.135, -0.10, table, seg)
-	b.disc(0, 0, 2.30, -0.10, table, seg, true)
-
 	b.disc(0, 0, game.BoardRadius, -0.10, woodDark, seg, false)
 	b.cylinder(0, 0, game.BoardRadius, -0.10, 0.0, wood, seg)
 	b.disc(0, 0, game.BoardRadius-0.015, 0.0, wood, seg, true)
@@ -565,7 +585,7 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		roll := rotAxis(side, bd.S/game.BallR)
 		r.meshProg.Mat3(r.uBallRot, mat3Mul(roll, randomBallRot(bd.ID)))
 		r.meshProg.Float(r.uBall, 1)
-		r.meshProg.Float(r.uGloss, 0.10)
+		r.meshProg.Float(r.uGloss, 0.0)
 		r.ball.draw()
 		r.meshProg.Float(r.uBall, 0)
 	}
@@ -580,7 +600,7 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world mgl32.Mat4, g *game
 		r.meshProg.Mat4(r.uModel, model)
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
 		r.meshProg.Float(r.uBall, 1)
-		r.meshProg.Float(r.uGloss, 0.10)
+		r.meshProg.Float(r.uGloss, 0.0)
 		r.meshProg.Mat3(r.uBallRot, mat3Mul(rotAxis(mgl32.Vec3{0.4, 1, 0.2}, float32(now)*18), randomBallRot(sh.Color+7)))
 		r.ball.draw()
 		r.meshProg.Float(r.uBall, 0)
@@ -713,9 +733,8 @@ func (r *Renderer) drawHand(world mgl32.Mat4, g *game.Game, o, d mgl32.Vec3, now
 	end, _, _ := r.aimTarget(g, o, d)
 	r.drawBeam(world, o, end)
 
-	// Loaded bead at the muzzle, the spare just below it.
+	// Only the loaded bead rides on the controller.
 	r.drawBallWorld(world, o.Add(d.Mul(0.10)), game.BallR, g.Loaded, now)
-	r.drawBallWorld(world, o.Add(mgl32.Vec3{0, -0.085, 0}).Add(d.Mul(0.03)), game.BallR*0.55, g.Next, now*0.7)
 }
 
 // drawBeam stretches the unit beam between two board-space points.
@@ -772,7 +791,7 @@ func (r *Renderer) drawBallWorld(world mgl32.Mat4, at mgl32.Vec3, radius float32
 	c := ballColor(color)
 	r.meshProg.Mat4(r.uModel, model)
 	r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
-	r.meshProg.Float(r.uGloss, 0.10)
+	r.meshProg.Float(r.uGloss, 0.0)
 	r.meshProg.Float(r.uUnlit, 0)
 	r.meshProg.Float(r.uBall, 1)
 	r.meshProg.Mat3(r.uBallRot, mat3Mul(rotAxis(mgl32.Vec3{0.3, 1, 0.1}, float32(phase)*0.8), randomBallRot(color+13)))

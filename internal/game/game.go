@@ -529,8 +529,8 @@ func (g *Game) stepChain(dt float32) {
 				// The two halves have collided: now the combo knockback lands.
 				if g.pendingKnock > 0 {
 					g.KnockVel -= g.pendingKnock
-					if g.KnockVel < -3.5 {
-						g.KnockVel = -3.5
+					if g.KnockVel < -6 {
+						g.KnockVel = -6
 					}
 					g.pendingKnock = 0
 				}
@@ -718,13 +718,14 @@ func (g *Game) matchAt(idx int) {
 	// The combo impulse is held until the front and rear halves meet again;
 	// if the pop touched an end of the chain there is no collision to wait for.
 	if g.Combo >= 2 {
-		impulse := 0.9 * float32(g.Combo)
+		c := float32(g.Combo)
+		impulse := 0.8*c + 0.35*c*c // heavier with every combo step
 		if lo > 0 && lo < len(g.Balls) {
 			g.pendingKnock += impulse
 		} else {
 			g.KnockVel -= impulse
-			if g.KnockVel < -3.5 {
-				g.KnockVel = -3.5
+			if g.KnockVel < -6 {
+				g.KnockVel = -6
 			}
 		}
 	}

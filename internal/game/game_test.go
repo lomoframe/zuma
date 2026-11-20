@@ -278,3 +278,34 @@ func TestKnockbackStopsAtEntrance(t *testing.T) {
 		t.Fatalf("recoil should stop at the wall, got %v", g.KnockVel)
 	}
 }
+
+func TestMidChainComboKnockFiresAfterCollision(t *testing.T) {
+	g := New(1)
+	g.Queue = nil
+	g.Shots = nil
+	colors := []int{1, 1, 2, 0, 0, 0, 2, 1, 1}
+	g.Balls = nil
+	for i, c := range colors {
+		g.Balls = append(g.Balls, Ball{S: 9.0 - float32(i)*Diam, Color: c, ID: i + 1})
+	}
+	g.Combo = 1
+	g.comboT = 1
+	g.matchAt(3)
+	if g.pendingKnock == 0 {
+		t.Fatalf("mid-chain combo did not queue a knock")
+	}
+	if g.KnockVel != 0 {
+		t.Fatalf("knock applied before the halves met")
+	}
+	fired := false
+	for i := 0; i < 600; i++ {
+		g.stepChain(1.0 / 60.0)
+		if g.KnockVel != 0 {
+			fired = true
+			break
+		}
+	}
+	if !fired {
+		t.Fatalf("knock never fired: pending=%v pendingAhead=%d", g.pendingKnock, g.pendingAhead)
+	}
+}
