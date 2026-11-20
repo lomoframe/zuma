@@ -78,7 +78,9 @@ beam on purpose — the beam itself stops on the bead it will hit.
 - Gaps close from the **front** section (the side nearer the hole), so a clear
   can pull the next beads into a new match — chain reactions come from there.
 - The launcher only hands you colours that are **still on the chain**; a colour
-  that has been cleared completely is not dealt until it spawns again.
+  that has been cleared completely is not dealt until it spawns again. The band
+  painted around the felt wears the colour of the bead in hand, so the launcher
+  and the table always agree.
 - Losing: the chain's head reaches the hole. Winning: board and queue empty —
   the round then waits for you. The trigger fires a volley of thirty ordinary
   beads — every colour, random angles inside a 20° cone around your aim ray,
@@ -206,6 +208,7 @@ changing any on-screen text.
 - **场景**：盘面立在面前的桌上，像弹球台一样后仰 20°；标题页固定在房间里某个
   坐标，转头不会拖着它走。桌面窗口只是左眼的调试镜像。
 - 桌面有自己的坐标系：原点取毡面中心，**桌面高度＝原点到地面的距离（默认 0.50 m）**，倾角绕这个原点旋转（默认 20°）。右手摇杆上下调高度（0.15–1.65 m），左手摇杆上下调倾角（向上更平、向下更陡，0–35°）；桌子与盘面作为同一个刚体一起转。HUD 信息与结算文字独占一个「直立坐标系」——在世界里始终与地面垂直，不跟桌面倾角走。
+- 盘面外圈那条装饰线跟着**手上的球色**走（换球即换色），看一眼盘沿就知道下一颗是什么颜色。
 - 过关后结算页会等你扣扳机：一击沿射线方向、20° 圆锥内随机角度喷出 30 颗各色球，
   就是普通的空射（同样速度、同样弹道），伴随一声「砰」，随后进入下一关。
 - 规则：线路/盘形每关随机（单线螺旋、最多两层环、迷宫/圆弧发卡、波浪发卡、

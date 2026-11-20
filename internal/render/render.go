@@ -225,7 +225,9 @@ type Renderer struct {
 	uBallRot                                        mat3Loc
 	uMVP, uTex, uColor                              int32
 
-	board    *Mesh
+	board *Mesh
+	// rim is the painted edge band, drawn with the colour of the bead in hand.
+	rim      *Mesh
 	table    *Mesh
 	path     *game.Path
 	pathKey  string
@@ -310,6 +312,7 @@ func (r *Renderer) SetPath(bd game.Board, p *game.Path) {
 		return
 	}
 	r.board = upload(buildBoard(bd, p))
+	r.rim = upload(buildRim(bd))
 	r.table = upload(buildTable(bd))
 	r.path = p
 	r.pathKey = key
@@ -412,6 +415,18 @@ func tableRadius(bd game.Board) float32 {
 	return r + 0.55 // the felt edge plus the wooden rim, with a margin
 }
 
+// buildRim is the painted band around the felt. Its vertices are white so the
+// draw call can tint it with whatever bead the player is holding.
+func buildRim(bd game.Board) *Builder {
+	b := &Builder{}
+	pts := bd.Inflate(0.115).Outline(180)
+	if len(pts) > 0 {
+		pts = append(pts, pts[0])
+	}
+	b.ribbon(game.NewPath(pts), 0.035, 0.020, rgba(1, 1, 1, 1))
+	return b
+}
+
 func buildTable(bd game.Board) *Builder {
 	b := &Builder{}
 	const seg = 120
@@ -431,7 +446,6 @@ func buildBoard(bd game.Board, path *game.Path) *Builder {
 	woodDark := rgba(0.10, 0.065, 0.05, 1)
 	felt := rgba(0.105, 0.300, 0.305, 1)
 	feltHi := rgba(0.14, 0.36, 0.36, 1)
-	copper := rgba(0.66, 0.43, 0.17, 1)
 	stone := rgba(0.22, 0.23, 0.26, 1)
 
 	// The felt takes the board's own silhouette, so oval / rounded-rectangle /
@@ -446,7 +460,6 @@ func buildBoard(bd game.Board, path *game.Path) *Builder {
 		return pts
 	}
 	b.ribbon(game.NewPath(closeLoop(bd.Inflate(0.01).Outline(180))), 0.05, 0.013, feltHi)
-	b.ribbon(game.NewPath(closeLoop(bd.Inflate(0.115).Outline(180))), 0.035, 0.020, copper)
 
 	// The groove: a channel just wide enough for the beads, with two lit lips.
 	b.ribbon(path, game.Diam*1.30, 0.0120, rgba(0.030, 0.075, 0.078, 1))
@@ -572,6 +585,16 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g 
 	r.meshProg.Vec4(r.uTint, 1, 1, 1, 1)
 	r.meshProg.Float(r.uGloss, 0.25)
 	r.board.draw()
+
+	// The rim band wears the colour of the bead in hand.
+	if r.rim != nil {
+		c := ballColor(g.Loaded)
+		r.meshProg.Mat4(r.uModel, world)
+		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
+		r.meshProg.Float(r.uGloss, 0.25)
+		r.rim.draw()
+		r.meshProg.Vec4(r.uTint, 1, 1, 1, 1)
+	}
 
 	// Chain beads.
 	r.meshProg.Float(r.uGloss, 1.10)
