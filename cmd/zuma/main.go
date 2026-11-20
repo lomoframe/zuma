@@ -57,9 +57,9 @@ type app struct {
 	msaa        int32
 }
 
-// aimTiltDeg presses the controller ray forward (down) so the player does not
-// have to angle the pad steeply at the table.
-const aimTiltDeg = 30
+// aimPitchDeg is how far the shot direction is pitched from the controller's
+// -Z (blue) toward -Y (green), toward the physical tip.
+const aimPitchDeg = 45
 
 // pressForward pitches a direction down by deg around the world X axis. A
 // world axis (rather than one derived from the direction) keeps the response
@@ -476,12 +476,13 @@ func (a *app) updateVRAim(now float64) {
 			dev, info.Type, info.TrackingSystem, info.Serial, info.RenderModel)
 	}
 
-	// Aim from the grip pose with the calibrated local direction: 30 degrees
-	// from -Z (blue) toward -Y (green), which is where the physical tip is on
-	// the Quest 2 Touch controllers this project runs on.
+	// Aim from the grip pose with the calibrated local direction: pitched from
+	// -Z (blue) toward -Y (green) by aimPitchDeg, which is where the physical
+	// tip is on the Quest 2 Touch controllers this project runs on.
 	pose, poseOK := vr.Pose(int(dev))
 	if poseOK {
-		local := mgl32.Vec3{0, -0.5, -0.8660254}
+		th := mgl32.DegToRad(aimPitchDeg)
+		local := mgl32.Vec3{0, -float32(math.Sin(float64(th))), -float32(math.Cos(float64(th)))}
 		w := pose.Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
 		d := mgl32.Vec3{w[0], w[1], w[2]}
 		if d.Len() > 1e-4 {
