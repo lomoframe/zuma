@@ -174,6 +174,7 @@ func main() {
 	}
 	renderer.StartSplash(splashStart, *title)
 
+	a.tiltDeg = float32(boardTiltDeg)
 	a.placeBoard()
 
 	// Paint the loading cover before SteamVR comes up: vr.Init blocks for a
@@ -190,7 +191,6 @@ func main() {
 
 	a.vrDebug = *vrDebug
 	a.vrcam = *vrcam
-	a.tiltDeg = float32(boardTiltDeg)
 	if a.vrcam {
 		a.cam.dist = 4.6 // tighter documentation framing
 	}
