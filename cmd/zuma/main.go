@@ -35,6 +35,7 @@ type app struct {
 	boardInv    mgl32.Mat4
 	placedBoard game.Board
 	sceneLift   float32 // right stick: whole scene up/down, metres
+	tiltDeg     float32 // left stick: board tilt, degrees
 	lastAimT    float64
 	tableWorld  mgl32.Mat4
 	tilt        mgl32.Mat4
@@ -189,6 +190,7 @@ func main() {
 
 	a.vrDebug = *vrDebug
 	a.vrcam = *vrcam
+	a.tiltDeg = float32(boardTiltDeg)
 	if a.vrcam {
 		a.cam.dist = 4.6 // tighter documentation framing
 	}
@@ -586,6 +588,15 @@ func (a *app) updateVRAim(now float64) {
 			a.sceneLift = float32(math.Max(-0.65, math.Min(0.85, float64(a.sceneLift))))
 			a.placeBoard()
 		}
+		// Left stick up/down trims the board tilt: up flattens, down steepens.
+		if _, ls, lok := vr.Controller(vr.LeftHand); lok {
+			if v := ls.AxisY; math.Abs(float64(v)) > 0.2 {
+				const tiltSpeed = 25.0 // degrees per second at full deflection
+				a.tiltDeg -= v * tiltSpeed * float32(dt)
+				a.tiltDeg = float32(math.Max(0, math.Min(35, float64(a.tiltDeg))))
+				a.placeBoard()
+			}
+		}
 	}
 
 	pose, poseOK := vr.Pose(int(dev))
@@ -636,7 +647,7 @@ func (a *app) updateVRAim(now float64) {
 func (a *app) placeBoard() {
 	bd := a.g.Board
 	hinge := bd.HalfH()
-	deg := float32(boardTiltDeg)
+	deg := a.tiltDeg
 	if hinge > 0.01 {
 		const farRise = 0.85 // metres, the height the first tilted board gave
 		if s := farRise / (2 * hinge * vrBoardScale); s < 1 {
@@ -694,7 +705,7 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	if a.handPoseOK {
 		devO = fmt.Sprintf("(%.2f,%.2f,%.2f)", a.handPose[12], a.handPose[13], a.handPose[14])
 	}
-	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v lift=%.2f frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.sceneLift, a.vrFrames)
+	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v lift=%.2f tilt=%.1f frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.sceneLift, a.tiltDeg, a.vrFrames)
 	a.vrFrames = 0
 }
 
