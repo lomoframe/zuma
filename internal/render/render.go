@@ -277,6 +277,13 @@ func mat3Mul(a, b mgl32.Mat3) mgl32.Mat3 {
 	return r
 }
 
+// ballPhase decorrelates the grain of neighbouring beads without touching
+// the axis they roll about.
+func ballPhase(id int) float32 {
+	h := uint32(id)*2246822519 + 0x165667b1
+	return float32(h%62832) / 10000 // 0 .. 2π
+}
+
 // randomBallRot gives every bead its own texture orientation so the seams do
 // not line up across the chain.
 func randomBallRot(id int) mgl32.Mat3 {
@@ -620,8 +627,12 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g 
 		r.meshProg.Vec4(r.uTint, c[0], c[1], c[2], 1)
 		_, tan := g.Path.At(bd.S)
 		side := mgl32.Vec3{tan.Y(), 0, -tan.X()} // perpendicular to travel, horizontal
-		roll := rotAxis(side, bd.S/game.BallR)
-		r.meshProg.Mat3(r.uBallRot, mat3Mul(roll, randomBallRot(bd.ID)))
+		// One shared axis for the whole chain: the bead turns about the
+		// horizontal axis across its travel. Beads differ only by a phase
+		// offset, so the grain reads as one surface rolling forward instead
+		// of every bead spinning in its own direction.
+		roll := rotAxis(side, bd.S/game.BallR+ballPhase(bd.ID))
+		r.meshProg.Mat3(r.uBallRot, roll)
 		r.meshProg.Float(r.uBall, 1)
 		r.meshProg.Float(r.uGloss, 0.0)
 		r.ball.draw()
