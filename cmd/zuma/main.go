@@ -49,6 +49,22 @@ type app struct {
 	msaa       int32
 }
 
+// aimTiltDeg presses the controller ray forward (down) so the player does not
+// have to angle the pad steeply at the table.
+const aimTiltDeg = 30
+
+// tiltForward rotates d toward -Y by deg degrees around the horizontal axis.
+func tiltForward(d mgl32.Vec3, deg float32) mgl32.Vec3 {
+	axis := d.Cross(mgl32.Vec3{0, 1, 0})
+	if axis.Len() < 1e-4 {
+		return d
+	}
+	axis = axis.Normalize()
+	r := mgl32.HomogRotate3D(mgl32.DegToRad(-deg), axis)
+	v := r.Mul4x1(mgl32.Vec4{d[0], d[1], d[2], 0})
+	return mgl32.Vec3{v[0], v[1], v[2]}.Normalize()
+}
+
 const (
 	vrBoardY     = 0.86
 	vrBoardZ     = -1.55
@@ -378,6 +394,9 @@ func (a *app) fire() bool {
 		return false
 	}
 	ok := a.g.Fire(a.aimO, a.aimD)
+	if ok && a.vrDebug {
+		log.Printf("shot o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", a.aimO[0], a.aimO[1], a.aimO[2], a.aimD[0], a.aimD[1], a.aimD[2])
+	}
 	a.playEvents()
 	return ok
 }
@@ -450,6 +469,7 @@ func (a *app) updateVRAim(now float64) {
 				a.aimNote = "flipped"
 			}
 			a.aimO, a.aimD = a.boardRay(o, d)
+			a.aimD = tiltForward(a.aimD, aimTiltDeg)
 			a.aimOK = true
 		} else {
 			a.aimNote = "bad-dir"

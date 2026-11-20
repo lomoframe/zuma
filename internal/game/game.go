@@ -478,9 +478,9 @@ func (g *Game) moveShots(dt float32) {
 			g.insert(hit, idx, sh.Color)
 			continue
 		}
-		// A miss leaves the board volume: below the table, above the player or
-		// far outside the rim.
-		if p1.Y() < -0.2 || p1.Y() > 3.5 || (mgl32.Vec2{p1.X(), p1.Z()}).Len() > BoardRadius+1.2 {
+		// A miss stops on the table: the bead follows the ray to its end
+		// instead of dropping through the board.
+		if p1.Y() <= 0.03 || p1.Y() > 3.5 || (mgl32.Vec2{p1.X(), p1.Z()}).Len() > BoardRadius+1.2 {
 			continue
 		}
 		sh.Pos = p1

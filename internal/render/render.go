@@ -509,7 +509,7 @@ func (r *Renderer) aimEnd(g *game.Game, o, d mgl32.Vec3) mgl32.Vec3 {
 func (r *Renderer) drawHand(world mgl32.Mat4, g *game.Game, o, d mgl32.Vec3, now float64) {
 	end := r.aimEnd(g, o, d)
 	r.drawBeam(world, o, end)
-	r.drawRingAt(world, end, 0.05, rgba(0.40, 0.95, 1.0, 0.85))
+	r.drawRingAt(world, end, 0.035, rgba(0.40, 0.95, 1.0, 0.9))
 
 	// Loaded bead at the muzzle, the spare just below it.
 	r.drawBallWorld(world, o.Add(d.Mul(0.10)), game.BallR, g.Loaded, now)
@@ -537,7 +537,7 @@ func (r *Renderer) drawBeam(world mgl32.Mat4, from, to mgl32.Vec3) {
 		z.X(), z.Y(), z.Z(), 0,
 		c.X(), c.Y(), c.Z(), 1,
 	}
-	model := world.Mul4(m).Mul4(mgl32.Scale3D(0.020, 0.020, l))
+	model := world.Mul4(m).Mul4(mgl32.Scale3D(0.006, 0.006, l))
 	r.meshProg.Mat4(r.uModel, model)
 	r.meshProg.Vec4(r.uTint, 0.40, 0.95, 1.0, 0.95)
 	r.meshProg.Float(r.uGloss, 0)
