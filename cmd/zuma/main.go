@@ -34,6 +34,8 @@ type app struct {
 	board       mgl32.Mat4
 	boardInv    mgl32.Mat4
 	placedBoard game.Board
+	sceneLift   float32 // right stick: whole scene up/down, metres
+	lastAimT    float64
 	tableWorld  mgl32.Mat4
 	tilt        mgl32.Mat4
 	prevTrig    bool
@@ -171,7 +173,6 @@ func main() {
 	}
 	renderer.StartSplash(splashStart, *title)
 
-	a.tableWorld = mgl32.Translate3D(0, vrBoardY, vrBoardZ).Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
 	a.placeBoard()
 
 	// Paint the loading cover before SteamVR comes up: vr.Init blocks for a
@@ -572,6 +573,21 @@ func (a *app) updateVRAim(now float64) {
 	// Aim from the grip pose with the calibrated local direction: pitched from
 	// -Z (blue) toward -Y (green) by aimPitchDeg, which is where the physical
 	// tip is on the Quest 2 Touch controllers this project runs on.
+	// Right stick up/down raises or lowers the whole scene (table, board, HUD).
+	{
+		const liftSpeed = 0.6 // metres per second at full deflection
+		dt := now - a.lastAimT
+		if dt < 0 || dt > 0.25 {
+			dt = 1.0 / 90.0
+		}
+		a.lastAimT = now
+		if v := st.AxisY; math.Abs(float64(v)) > 0.2 {
+			a.sceneLift += v * liftSpeed * float32(dt)
+			a.sceneLift = float32(math.Max(-0.65, math.Min(0.85, float64(a.sceneLift))))
+			a.placeBoard()
+		}
+	}
+
 	pose, poseOK := vr.Pose(int(dev))
 	if poseOK {
 		th := mgl32.DegToRad(aimPitchDeg)
@@ -632,15 +648,19 @@ func (a *app) placeBoard() {
 	tilt := mgl32.Translate3D(0, 0, hinge).
 		Mul4(mgl32.HomogRotate3DX(mgl32.DegToRad(deg))).
 		Mul4(mgl32.Translate3D(0, 0, -hinge))
+	a.tableWorld = mgl32.Translate3D(0, vrBoardY+a.sceneLift, vrBoardZ).
+		Mul4(mgl32.Scale3D(vrBoardScale, vrBoardScale, vrBoardScale))
 	a.tilt = tilt
 	a.board = a.tableWorld.Mul4(tilt)
 	a.boardInv = a.board.Inv()
+	if bd != a.placedBoard {
+		near := a.board.Mul4x1(mgl32.Vec4{0, 0, hinge, 1}).Y()
+		centre := a.board.Mul4x1(mgl32.Vec4{0, 0, 0, 1}).Y()
+		far := a.board.Mul4x1(mgl32.Vec4{0, 0, -hinge, 1}).Y()
+		log.Printf("board %.2fx%.2f: tilt %.1f deg, felt near %.2f m, centre %.2f m, far %.2f m (table top %.2f m)",
+			bd.W, bd.H, deg, near, centre, far, vrBoardY+a.sceneLift-0.10*vrBoardScale)
+	}
 	a.placedBoard = bd
-	near := a.board.Mul4x1(mgl32.Vec4{0, 0, hinge, 1}).Y()
-	centre := a.board.Mul4x1(mgl32.Vec4{0, 0, 0, 1}).Y()
-	far := a.board.Mul4x1(mgl32.Vec4{0, 0, -hinge, 1}).Y()
-	log.Printf("board %.2fx%.2f: tilt %.1f deg, felt near %.2f m, centre %.2f m, far %.2f m (table top %.2f m)",
-		bd.W, bd.H, deg, near, centre, far, vrBoardY-0.10*vrBoardScale)
 }
 
 // boardRay converts a world-space ray into board space.
@@ -674,7 +694,7 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	if a.handPoseOK {
 		devO = fmt.Sprintf("(%.2f,%.2f,%.2f)", a.handPose[12], a.handPose[13], a.handPose[14])
 	}
-	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.vrFrames)
+	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v lift=%.2f frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.sceneLift, a.vrFrames)
 	a.vrFrames = 0
 }
 
