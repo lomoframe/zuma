@@ -52,17 +52,20 @@ the right hand and its beam.)*
 
 | Action | Steam Frame (VR) | Desktop (development) |
 | --- | --- | --- |
-| Start from the title screen | Right trigger | `Space` / left click |
-| Aim | Point the right controller | Move the mouse over the board |
-| Fire | Right trigger | Left click / `Space` |
-| Restart after a loss | Right trigger | `R` |
-| Load the next level after a win | Right trigger | `Space` / left click |
+| Start from the title screen | Either trigger (that hand keeps the launcher) | `Space` / left click |
+| Take the launcher | Trigger on the other hand | — |
+| Aim | Point the controller holding the launcher | Move the mouse over the board |
+| Fire | Trigger on the launcher hand | Left click / `Space` |
+| Restart after a loss | Trigger on the launcher hand | `R` |
+| Load the next level after a win | Trigger on the launcher hand | `Space` / left click |
 | Raise / lower the table (height above the floor) | Right stick up / down | — |
 | Tilt the table (about its centre) | Left stick up / down (up = flatter) | — |
 | Quit | SteamVR menu | `Esc` |
 
 The loaded bead rides at the controller; there is no reticle at the end of the
-beam on purpose — the beam itself stops on the bead it will hit.
+beam on purpose — the beam itself stops on the bead it will hit. Only the hand
+that holds the launcher draws the beam and the bead: pull the other hand's
+trigger to pass the launcher over, pull the launcher's own trigger to shoot.
 
 ## Rules
 
@@ -173,7 +176,7 @@ make shot        # refresh the documentation screenshots
 | `-demo won\|lost` | Put the round in a finished state for screenshots |
 | `-seed N` | Reproduce a particular layout |
 | `-vrcam` | Documentation framing: pose the right hand and its beam |
-| `-controller-model` | Draw the OpenVR controller mesh (off by default: the 10k-vertex Quest 2 mesh crashes zink on the Frame) |
+| `-controller-model=false` | Skip the controller mesh. OpenXR never draws the hands for the app, so the game does — and the beam leaves from the mesh's front vertex |
 
 ## Layout
 

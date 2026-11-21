@@ -1,10 +1,42 @@
 package main
 
 import (
+	"image"
 	"testing"
 
 	"github.com/go-gl/mathgl/mgl32"
 )
+
+// TestPixRGBACopiesRowsVerbatim guards the fast path the controller loader
+// takes for decoded PNGs: a padded stride must not shift the picture.
+func TestPixRGBACopiesRowsVerbatim(t *testing.T) {
+	w, h, stride := 3, 2, 3*4+8 // padded rows, as image.NRGBA allows
+	src := &image.NRGBA{Pix: make([]byte, stride*h), Stride: stride, Rect: image.Rect(0, 0, w, h)}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := y*stride + x*4
+			src.Pix[i+0] = byte(x*40 + 1)
+			src.Pix[i+1] = byte(y*40 + 2)
+			src.Pix[i+2] = 3
+			src.Pix[i+3] = 4
+		}
+	}
+	got := pixRGBA(src)
+	if got.w != w || got.h != h || len(got.pix) != w*h*4 {
+		t.Fatalf("bad shape %dx%d, %d bytes", got.w, got.h, len(got.pix))
+	}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			s := src.Pix[y*stride+x*4:]
+			d := got.pix[(y*w+x)*4:]
+			for c := 0; c < 4; c++ {
+				if d[c] != s[c] {
+					t.Fatalf("pixel (%d,%d) channel %d = %d, want %d", x, y, c, d[c], s[c])
+				}
+			}
+		}
+	}
+}
 
 // TestRayPlaneRoundTrip pins the desktop aiming pipe: a board point projected
 // to screen and unprojected again must land on the same spot.

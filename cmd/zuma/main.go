@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"hash/fnv"
+	"image"
 	"image/png"
 	"log"
 	"math"
@@ -35,47 +37,55 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn           bool
-	wantXR         bool
-	xrOn           bool    // display goes through an OpenXR session
-	xrPassthrough  bool    // clear the eye buffers transparent so the room shows
-	xrTime         float64 // this frame's predicted display time
-	eyes           [2]*gl.RenderTarget
-	board          mgl32.Mat4
-	boardInv       mgl32.Mat4
-	placedBoard    game.Board
-	tableY         float32 // table height: floor to the table origin, metres
-	winAdvanceAt   float64 // win screen: when the next level loads
-	tiltDeg        float32 // left stick: board tilt, degrees
-	lastAimT       float64
-	tableWorld     mgl32.Mat4
-	tilt           mgl32.Mat4
-	prevTrig       bool
-	vrAimOK        bool
-	vrAim          mgl32.Vec2
-	vrDebug        bool
-	vrcam          bool // documentation framing
-	vrFrames       int
-	lastVRLog      float64
-	showOrigin     bool
-	liftArmed      bool // right stick has been seen near neutral
-	tiltArmed      bool // left stick has been seen near neutral
-	vrRetryAt      float64
-	vrFailLog      float64
-	aimNote        string
-	aimO           mgl32.Vec3
-	aimD           mgl32.Vec3
-	aimOK          bool
-	leftAimO       mgl32.Vec3
-	leftAimD       mgl32.Vec3
-	leftAimOK      bool
-	leftPrevTrig   bool
-	aimFlip        bool
-	aimFlipSet     bool
-	flipSum        float32
-	flipN          int
-	aimSmooth      mgl32.Vec3
-	aimSmoothOK    bool
+	vrOn          bool
+	wantXR        bool
+	xrOn          bool    // display goes through an OpenXR session
+	xrPassthrough bool    // clear the eye buffers transparent so the room shows
+	xrTime        float64 // this frame's predicted display time
+	eyes          [2]*gl.RenderTarget
+	board         mgl32.Mat4
+	boardInv      mgl32.Mat4
+	placedBoard   game.Board
+	tableY        float32 // table height: floor to the table origin, metres
+	winAdvanceAt  float64 // win screen: when the next level loads
+	tiltDeg       float32 // left stick: board tilt, degrees
+	lastAimT      float64
+	tableWorld    mgl32.Mat4
+	tilt          mgl32.Mat4
+	prevTrig      bool
+	vrAimOK       bool
+	vrAim         mgl32.Vec2
+	vrDebug       bool
+	vrcam         bool // documentation framing
+	vrFrames      int
+	lastVRLog     float64
+	showOrigin    bool
+	liftArmed     bool // right stick has been seen near neutral
+	tiltArmed     bool // left stick has been seen near neutral
+	vrRetryAt     float64
+	vrFailLog     float64
+	aimNote       string
+	aimO          mgl32.Vec3
+	aimD          mgl32.Vec3
+	aimOK         bool
+	leftAimO      mgl32.Vec3
+	leftAimD      mgl32.Vec3
+	leftAimOK     bool
+	leftPrevTrig  bool
+	aimFlip       bool
+	aimFlipSet    bool
+	flipSum       float32
+	flipN         int
+	aimSmooth     mgl32.Vec3
+	aimSmoothOK   bool
+	// The two hands aim independently; aimO/aimD/aimOK is whichever hand holds
+	// the firing right (fireHand), and rAim* is always the right hand's own ray.
+	rAimO          mgl32.Vec3
+	rAimD          mgl32.Vec3
+	rAimOK         bool
+	fireHand       int     // xr.Left or xr.Right: the hand that owns the launcher
+	trigL          float32 // last left trigger value, for the debug line
+	trigR          float32 // last right trigger value, for the debug line
 	handPose       mgl32.Mat4
 	handPoseOK     bool
 	leftHandPose   mgl32.Mat4
@@ -92,8 +102,228 @@ type app struct {
 	lastDev         int
 	modelState      int
 	ctrlModel       bool
-	ctrlModelAt     float64 // next attempt for the XR render model fetch
-	msaa            int32
+	// Controller meshes are fetched, parsed and decoded off the render thread:
+	// ctrlCh carries one hand's parsed nodes plus its decoded textures back,
+	// ctrlNodes/ctrlPix hold whatever still has to be uploaded, and the upload
+	// itself is spread over frames so no single frame stalls.
+	ctrlCh       chan *ctrlHandData
+	ctrlFetchAt  [2]float64
+	ctrlTries    [2]int // failed fetch attempts, for throttled logging
+	ctrlFetching [2]bool
+	ctrlGot      [2]bool // the worker delivered this hand's nodes
+	ctrlUp       [2]bool // every node and texture of this hand is in GL
+	ctrlTotal    [2]int  // nodes delivered for that hand
+	ctrlNodes    [2][]ctrlNodeData
+	ctrlPix      [2][]ctrlPix
+	ctrlTexIDs   [2][]uint32
+	msaa         int32
+}
+
+// ctrlNodeData is one drawable piece of a controller, already parsed and with
+// its texture decoded off the render thread.
+type ctrlNodeData struct {
+	name          string
+	pos, nrm, uvs []float32
+	idx           []uint16
+	tex           int // index into the hand's decoded textures, -1 when untextured
+	trigger       bool
+}
+
+// ctrlPix is one decoded RGBA8 texture waiting for its GL upload.
+type ctrlPix struct {
+	w, h int
+	pix  []byte
+}
+
+// ctrlHandData is one hand's finished worker output.
+type ctrlHandData struct {
+	hand   int
+	nodes  []ctrlNodeData
+	pixels []ctrlPix
+	verts  []mgl32.Vec3
+	err    error
+}
+
+// parseControllerModel turns the runtime's glTF into node meshes plus decoded
+// textures. It runs on its own goroutine and touches no GL state, so the title
+// page keeps its frame rate while twelve 2k PNGs are decoded.
+func parseControllerModel(hand int, data []byte, out chan<- *ctrlHandData) {
+	started := time.Now()
+	res := &ctrlHandData{hand: hand}
+	doc, err := gltf.ParseGLB(data)
+	if err != nil {
+		res.err = err
+		out <- res
+		return
+	}
+	log.Printf("controller model hand %d: %d bytes (%s), %d nodes %v, %d verts, %d tris, %d materials, %d images",
+		hand, len(data), doc.Asset.Generator, len(doc.Nodes), doc.NodeNames(),
+		doc.Verts(), doc.Tris(), len(doc.Materials), len(doc.Images))
+	seen := make(map[uint32]int, len(doc.Images))
+	for _, node := range doc.NodeNames() {
+		// status is a cover over the battery/hand-id display that the body
+		// already paints; drawing it on top hides that artwork behind its dark
+		// texels, so it is skipped.
+		if node == "status" {
+			continue
+		}
+		p, n, uv, ii, img, nerr := doc.NodeMesh(node)
+		if nerr != nil {
+			log.Printf("controller model hand %d %s: %v", hand, node, nerr)
+			continue
+		}
+		ix := make([]uint16, len(ii))
+		bad := false
+		for k, v := range ii {
+			if v > 0xFFFF {
+				bad = true
+				break
+			}
+			ix[k] = uint16(v)
+		}
+		if bad {
+			log.Printf("controller model hand %d %s: needs 32-bit indices", hand, node)
+			continue
+		}
+		nd := ctrlNodeData{name: node, pos: p, nrm: n, uvs: uv, idx: ix, tex: -1, trigger: node == "trigger"}
+		if img >= 0 {
+			if raw, ierr := doc.ImageBytes(img); ierr == nil {
+				// Every material of this asset points at the same picture, so
+				// identical bytes only need one decode and one upload.
+				sum := fnv.New32a()
+				sum.Write(raw)
+				key := sum.Sum32()
+				if idx, ok := seen[key]; ok {
+					nd.tex = idx
+				} else if im, derr := png.Decode(bytes.NewReader(raw)); derr == nil {
+					nd.tex = len(res.pixels)
+					seen[key] = nd.tex
+					res.pixels = append(res.pixels, pixRGBA(im))
+				} else {
+					log.Printf("controller model hand %d %s: png: %v", hand, node, derr)
+				}
+			}
+		}
+		res.nodes = append(res.nodes, nd)
+		for i := 0; i+2 < len(p); i += 3 {
+			res.verts = append(res.verts, mgl32.Vec3{p[i], p[i+1], p[i+2]})
+		}
+		log.Printf("controller model hand %d %s: %d verts, %d tris", hand, node, len(p)/3, len(ix)/3)
+	}
+	log.Printf("controller model hand %d parsed off-thread in %v: %d nodes, %d distinct textures",
+		hand, time.Since(started).Round(time.Millisecond), len(res.nodes), len(res.pixels))
+	out <- res
+}
+
+// pixRGBA flattens a decoded image into the tight RGBA8 buffer the texture
+// upload wants, copying whole rows where the decoder already produced one.
+func pixRGBA(im image.Image) ctrlPix {
+	b := im.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return ctrlPix{}
+	}
+	pix := make([]byte, w*h*4)
+	if b.Min.X == 0 && b.Min.Y == 0 {
+		switch src := im.(type) {
+		case *image.NRGBA:
+			for y := 0; y < h; y++ {
+				copy(pix[y*w*4:(y+1)*w*4], src.Pix[y*src.Stride:y*src.Stride+w*4])
+			}
+			return ctrlPix{w: w, h: h, pix: pix}
+		case *image.RGBA:
+			for y := 0; y < h; y++ {
+				copy(pix[y*w*4:(y+1)*w*4], src.Pix[y*src.Stride:y*src.Stride+w*4])
+			}
+			return ctrlPix{w: w, h: h, pix: pix}
+		}
+	}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			rr, gg, bb, aa := im.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			i := (y*w + x) * 4
+			pix[i+0] = byte(rr >> 8)
+			pix[i+1] = byte(gg >> 8)
+			pix[i+2] = byte(bb >> 8)
+			pix[i+3] = byte(aa >> 8)
+		}
+	}
+	return ctrlPix{w: w, h: h, pix: pix}
+}
+
+// pumpControllerModels uploads what the worker produced, spending at most a few
+// milliseconds per frame: the 2k texture uploads are the expensive part and
+// doing all of them in one frame is what used to freeze the title page.
+func (a *app) pumpControllerModels() {
+	for drained := false; !drained; {
+		select {
+		case d := <-a.ctrlCh:
+			a.ctrlFetching[d.hand] = false
+			if d.err != nil {
+				log.Printf("controller model hand %d: %v", d.hand, d.err)
+				continue
+			}
+			a.r.ResetControllerModel(d.hand)
+			a.ctrlGot[d.hand] = true
+			a.ctrlTotal[d.hand] = len(d.nodes)
+			a.ctrlNodes[d.hand] = append(a.ctrlNodes[d.hand], d.nodes...)
+			a.ctrlPix[d.hand] = append(a.ctrlPix[d.hand], d.pixels...)
+			a.ctrlTexIDs[d.hand] = a.ctrlTexIDs[d.hand][:0]
+			a.ctrlVerts[d.hand] = d.verts
+			a.ctrlTipOK[d.hand] = false
+		default:
+			drained = true
+		}
+	}
+
+	// At most one 2k texture per frame: the upload plus its mip chain is the
+	// only expensive step, and doing twelve of them in one frame is what used
+	// to freeze the title page. The node meshes are small and go in together,
+	// so a hand never shows up half assembled.
+	deadline := time.Now().Add(8 * time.Millisecond)
+	for hand := 0; hand < 2; hand++ {
+		if len(a.ctrlTexIDs[hand]) < len(a.ctrlPix[hand]) && time.Now().Before(deadline) {
+			p := a.ctrlPix[hand][len(a.ctrlTexIDs[hand])]
+			t0 := time.Now()
+			tex := a.r.NewTextureRGBA(p.w, p.h, p.pix)
+			log.Printf("controller model hand %d texture %d: %dx%d uploaded in %v",
+				hand, len(a.ctrlTexIDs[hand]), p.w, p.h, time.Since(t0).Round(time.Millisecond))
+			a.ctrlTexIDs[hand] = append(a.ctrlTexIDs[hand], tex)
+		}
+		if len(a.ctrlTexIDs[hand]) < len(a.ctrlPix[hand]) {
+			continue // more textures to go: keep the hand hidden until they are all in
+		}
+		if len(a.ctrlPix[hand]) > 0 {
+			a.ctrlPix[hand] = nil // uploaded; the bytes live in GL now
+		}
+		for _, nd := range a.ctrlNodes[hand] {
+			var tex uint32
+			if nd.tex >= 0 && nd.tex < len(a.ctrlTexIDs[hand]) {
+				tex = a.ctrlTexIDs[hand][nd.tex]
+			}
+			a.r.AddControllerNodeUV(hand, nd.pos, nd.nrm, nd.uvs, nd.idx, tex)
+			if nd.trigger {
+				a.r.MarkControllerTrigger(hand)
+			}
+		}
+		a.ctrlNodes[hand] = nil
+		if a.ctrlGot[hand] && !a.ctrlUp[hand] {
+			a.ctrlUp[hand] = true
+			log.Printf("controller model hand %d ready: %d nodes, %d textures", hand, a.ctrlTotal[hand], len(a.ctrlTexIDs[hand]))
+		}
+	}
+	if a.ctrlUp[0] && a.ctrlUp[1] && a.modelState == 0 {
+		a.modelState = 2
+		log.Printf("controller model ready")
+	}
+}
+
+// handModelReady reports whether that hand's mesh is fully uploaded.
+func (a *app) handModelReady(hand int) bool {
+	if a.xrOn {
+		return a.ctrlUp[hand]
+	}
+	return a.modelState == 2
 }
 
 // aimPitchDeg is how far the shot direction is pitched from the controller's
@@ -142,7 +372,7 @@ func main() {
 	msaa := flag.Int("msaa", 4, "MSAA samples for the VR eye textures")
 	vrDebug := flag.Bool("vr-debug", false, "log head/controller/aim once per second")
 	ctrlModelHide := flag.Bool("controller-model-hide", false, "load and upload the controller mesh but do not draw it")
-	ctrlModel := flag.Bool("controller-model", false, "load the controller mesh (XR: XR_EXT_render_model glTF; OpenVR: SteamVR render model)")
+	ctrlModel := flag.Bool("controller-model", true, "load and draw the controller mesh (XR: XR_EXT_render_model glTF; OpenVR: SteamVR render model)")
 	aimX := flag.Float64("aim-x", 0, "board-space aim point x used by -screenshot")
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
@@ -210,9 +440,11 @@ func main() {
 		*seed = time.Now().UnixNano()
 	}
 	a := &app{
-		g:   game.New(*seed),
-		r:   renderer,
-		cam: camera{yaw: *yaw, pitch: *pitch, dist: *dist},
+		g:        game.New(*seed),
+		r:        renderer,
+		cam:      camera{yaw: *yaw, pitch: *pitch, dist: *dist},
+		ctrlCh:   make(chan *ctrlHandData, 4),
+		fireHand: xr.Right,
 	}
 	if *shot != "" && !titleSet {
 		*title = false // reference screenshots show the level, not the title art
@@ -398,86 +630,32 @@ func main() {
 
 		// XR path: the runtime owns the controller meshes, so they come from
 		// XR_EXT_render_model as glTF instead of SteamVR's render model API.
-		// Fetch and parse only for now; drawing comes next.
-		if a.xrOn && a.ctrlModel && a.modelState < 2 && xrReady && now >= a.ctrlModelAt {
-			// Retry quickly: the glTF fetch plus twelve 2k PNG decodes must
-			// land while the title page is up, not in the middle of a level.
-			a.ctrlModelAt = now + 0.5
-			loaded := true
+		// The XR fetches stay on this thread (they are cheap), but parsing the
+		// glTF and decoding twelve 2k PNGs runs on a worker, and the uploads
+		// are spread over frames: doing it all inline froze the title page for
+		// seconds and SteamVR reported the app as unresponsive.
+		if a.xrOn && a.ctrlModel && a.modelState < 2 && xrReady {
 			for _, hand := range []int{xr.Left, xr.Right} {
+				if a.ctrlFetching[hand] || a.ctrlUp[hand] || now < a.ctrlFetchAt[hand] {
+					continue
+				}
+				// Retry quickly: the fetch has to land while the title page is
+				// up, not in the middle of a level.
+				a.ctrlFetchAt[hand] = now + 0.5
 				data, err := xr.ModelGLTF(hand)
 				if err != nil {
-					log.Printf("controller model hand %d: %v", hand, err)
-					loaded = false
-					continue
-				}
-				doc, err := gltf.ParseGLB(data)
-				if err != nil {
-					log.Printf("controller model hand %d: %v", hand, err)
-					loaded = false
-					continue
-				}
-				log.Printf("controller model hand %d: %d bytes (%s), %d nodes %v, %d verts, %d tris, %d materials, %d images",
-					hand, len(data), doc.Asset.Generator, len(doc.Nodes), doc.NodeNames(),
-					doc.Verts(), doc.Tris(), len(doc.Materials), len(doc.Images))
-				// Upload every node of the controller (body, buttons, stick, trigger, ...)
-				// as its own mesh. Textures are the next step; this pass is
-				// flat-shaded.
-				{
-					a.r.ResetControllerModel(hand)
-					a.ctrlVerts[hand] = a.ctrlVerts[hand][:0]
-					a.ctrlTipOK[hand] = false
-					for _, node := range doc.NodeNames() {
-						p, n, uv, ii, img, nerr := doc.NodeMesh(node)
-						if nerr != nil {
-							log.Printf("controller model hand %d %s: %v", hand, node, nerr)
-							continue
-						}
-						var tex uint32
-						if img >= 0 {
-							if raw, ierr := doc.ImageBytes(img); ierr == nil {
-								if im, derr := png.Decode(bytes.NewReader(raw)); derr == nil {
-									tex = a.r.NewTexture(im)
-								} else {
-									log.Printf("controller model hand %d %s: png: %v", hand, node, derr)
-								}
-							}
-						}
-						ix := make([]uint16, len(ii))
-						bad := false
-						for k, v := range ii {
-							if v > 0xFFFF {
-								bad = true
-								break
-							}
-							ix[k] = uint16(v)
-						}
-						if bad {
-							log.Printf("controller model hand %d %s: needs 32-bit indices", hand, node)
-							continue
-						}
-						// status is a cover over the battery/hand-id display that the
-						// body already paints; drawing it on top hides that artwork
-						// behind its dark texels, so it is skipped.
-						if node == "status" {
-							continue
-						}
-						a.r.AddControllerNodeUV(hand, p, n, uv, ix, tex)
-						{
-							for i := 0; i+2 < len(p); i += 3 {
-								a.ctrlVerts[hand] = append(a.ctrlVerts[hand], mgl32.Vec3{p[i], p[i+1], p[i+2]})
-							}
-						}
-						if node == "trigger" {
-							a.r.MarkControllerTrigger(hand)
-						}
-						log.Printf("controller model hand %d %s: %d verts, %d tris", hand, node, len(p)/3, len(ix)/3)
+					// Throttle: while the controllers are asleep this fails on
+					// every retry, and one line every ten seconds is enough.
+					a.ctrlTries[hand]++
+					if a.ctrlTries[hand] == 1 || a.ctrlTries[hand]%20 == 0 {
+						log.Printf("controller model hand %d: %v (attempt %d)", hand, err, a.ctrlTries[hand])
 					}
+					continue
 				}
+				a.ctrlFetching[hand] = true
+				go parseControllerModel(hand, data, a.ctrlCh)
 			}
-			if loaded {
-				a.modelState = 2
-			}
+			a.pumpControllerModels()
 		}
 		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
 			m, state := vr.LoadRenderModel(a.lastDev)
@@ -492,7 +670,7 @@ func main() {
 			}
 		}
 		if a.xrOn {
-			if a.ctrlModel && a.modelState == 2 {
+			if a.ctrlModel && a.handModelReady(xr.Right) {
 				for _, hand := range []int{xr.Left, xr.Right} {
 					if mp, ok := xr.ModelPose(hand, a.xrTime); ok {
 						a.r.SetControllerOffset(hand, mp)
@@ -504,14 +682,14 @@ func main() {
 				}
 				a.modelPoseLogged = true
 			}
-			// While the title page is up, pulse the trigger buttons on both controllers:
-			// they are the "start" affordance.
+			// While the title page is up, flash the trigger buttons on both
+			// controllers: they are the "start" affordance.
 			if a.r.SplashActive(now) {
-				a.r.SetControllerTriggerGlow(float32(0.5 + 0.5*math.Sin(now*8)))
+				a.r.SetControllerTriggerBlink(true, math.Mod(now, 0.7) < 0.35)
 			} else {
-				a.r.SetControllerTriggerGlow(0)
+				a.r.SetControllerTriggerBlink(false, false)
 			}
-			a.r.SetLeftHand(a.leftHandPose, a.leftHandPoseOK && a.ctrlModel && a.modelState == 2)
+			a.r.SetLeftHand(a.leftHandPose, a.leftHandPoseOK && a.ctrlModel && a.handModelReady(xr.Left))
 			if xrReady {
 				a.renderEyesXR(a.xrTime, now)
 			}
@@ -684,6 +862,7 @@ func (a *app) renderDesktop(now float64) {
 	clearScene()
 	if a.r.SplashActive(now) {
 		a.r.DrawSplash(mgl32.Ident4(), render.SplashFit(w, h), now)
+		a.r.DrawControllers(vp, eye, a.handPose, a.handPoseOK)
 		return
 	}
 	a.r.DrawStatic(vp, mgl32.Ident4())
@@ -708,6 +887,7 @@ func (a *app) renderMirror(now float64) {
 	clearScene()
 	if a.r.SplashActive(now) {
 		a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
+		a.r.DrawControllers(proj.Mul4(view), cam, a.handPose, a.handPoseOK)
 		return
 	}
 	a.r.DrawStatic(proj.Mul4(view), a.board)
@@ -736,6 +916,7 @@ func (a *app) renderEyes(now float64) {
 		clearScene()
 		if a.r.SplashActive(now) {
 			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
+			a.r.DrawControllers(proj.Mul4(view), cam, a.handPose, a.handPoseOK)
 		} else {
 			a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 			if a.showOrigin {
@@ -792,6 +973,7 @@ func (a *app) renderEyesXR(displayTime, now float64) {
 		a.clearEye()
 		if a.r.SplashActive(now) {
 			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
+			a.r.DrawControllers(proj.Mul4(view), cam, a.handPose, a.handPoseOK)
 		} else {
 			a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
 			if a.showOrigin {
@@ -816,7 +998,7 @@ var currentWindow *glfw.Window
 // controllerTip finds the model vertex furthest along the aim direction for one
 // hand, in the runtime model space, so a shot leaves from the mesh itself.
 func (a *app) controllerTip(hand int, local mgl32.Vec3) (mgl32.Vec3, bool) {
-	if !a.xrOn || !a.ctrlModel || a.modelState != 2 || len(a.ctrlVerts[hand]) == 0 {
+	if !a.xrOn || !a.ctrlModel || !a.handModelReady(hand) || len(a.ctrlVerts[hand]) == 0 {
 		return mgl32.Vec3{}, false
 	}
 	mp, ok := xr.ModelPose(hand, a.xrTime)
@@ -853,16 +1035,6 @@ func (a *app) aimOrigin(pose mgl32.Mat4, hand int, local mgl32.Vec3) mgl32.Vec3 
 		o = mgl32.Vec3{w[0], w[1], w[2]}
 	}
 	return o
-}
-
-// fireFrom shoots the bead in hand along the given ray.
-func (a *app) fireFrom(o, d mgl32.Vec3) bool {
-	ok := a.g.Fire(o, d)
-	if ok && a.vrDebug {
-		log.Printf("shot o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", o[0], o[1], o[2], d[0], d[1], d[2])
-	}
-	a.playEvents()
-	return ok
 }
 
 func (a *app) fire() bool {
@@ -999,6 +1171,9 @@ func (a *app) updateVRAim(now float64) {
 		} else {
 			ok = false
 		}
+		// Keep the raw values even without a pose: the debug line and the
+		// fire-hand switch need them when tracking drops out.
+		a.trigR = right.Trigger
 	}
 	if !ok {
 		a.aimOK = false
@@ -1059,16 +1234,17 @@ func (a *app) updateVRAim(now float64) {
 			a.lastDev = int(dev)
 			a.handPose = pose
 			a.handPoseOK = true
-			a.aimO, a.aimD = a.boardRay(o, d)
+			a.rAimO, a.rAimD = a.boardRay(o, d)
 			if a.aimSmoothOK {
-				a.aimD = a.aimSmooth.Mul(0.6).Add(a.aimD.Mul(0.4)).Normalize()
+				a.rAimD = a.aimSmooth.Mul(0.6).Add(a.rAimD.Mul(0.4)).Normalize()
 			}
-			a.aimSmooth = a.aimD
+			a.aimSmooth = a.rAimD
 			a.aimSmoothOK = true
-			a.aimOK = true
+			a.rAimOK = true
 		}
 	} else {
 		a.handPoseOK = false
+		a.rAimOK = false
 		a.aimNote = "no-device-pose"
 	}
 
@@ -1086,18 +1262,23 @@ func (a *app) updateVRAim(now float64) {
 				a.leftAimOK = true
 			}
 		}
-		// Left trigger fires too: it takes the bead in hand along the left ray.
 		lt := lh.Trigger > 0.5
+		a.trigL = lh.Trigger
 		if lt && !a.leftPrevTrig {
-			if a.r.SplashActive(now) {
-				a.r.SplashExit(now)
-			} else if a.leftAimOK {
-				a.fireFrom(a.leftAimO, a.leftAimD)
-			}
+			a.pressTrigger(xr.Left, now)
 		}
 		a.leftPrevTrig = lt
 	} else {
 		a.leftHandPoseOK = false
+	}
+
+	// The launcher is a single seat: only the hand holding the firing right has
+	// the beam and the bead in hand, and only its trigger shoots.
+	if a.xrOn && a.fireHand == xr.Left {
+		a.aimO, a.aimD, a.aimOK = a.leftAimO, a.leftAimD, a.leftAimOK
+	} else {
+		a.fireHand = xr.Right
+		a.aimO, a.aimD, a.aimOK = a.rAimO, a.rAimD, a.rAimOK
 	}
 
 	// Left d-pad: any direction toggles passthrough. Only click edges count
@@ -1115,15 +1296,63 @@ func (a *app) updateVRAim(now float64) {
 	}
 
 	if st.Trigger && !a.prevTrig {
-		if a.r.SplashActive(now) {
-			// On the title page a trigger pull is "start", not a shot.
-			a.r.SplashExit(now)
-		} else {
-			a.pressFire(now)
-		}
+		a.pressTrigger(xr.Right, now)
 	}
 	a.prevTrig = st.Trigger
 	a.logVR(now, st, ok, dev)
+}
+
+// pressTrigger routes one trigger press. The hand without the firing right only
+// takes it over; the hand that holds it shoots. The press that starts the round
+// on the title page decides which hand gets the right, so the beam and the bead
+// show up in that hand.
+func (a *app) pressTrigger(hand int, now float64) {
+	splash := a.r.SplashActive(now)
+	if a.vrDebug {
+		log.Printf("trigger %s edge: rt=%.2f lt=%.2f fireHand=%s splash=%v",
+			handName(hand), a.trigR, a.trigL, handName(a.fireHand), splash)
+	}
+	// A hand without a usable ray cannot aim, so it cannot take the launcher.
+	if hand != a.fireHand && a.handAimReady(hand) {
+		a.setFireHand(hand)
+		if !splash {
+			return // this press only handed the launcher over
+		}
+	}
+	if splash {
+		log.Printf("title screen: start pressed with the %s hand", handName(hand))
+		a.r.SplashExit(now)
+		return
+	}
+	if hand == a.fireHand {
+		a.pressFire(now)
+	}
+}
+
+// handName is the label used in the input log lines.
+func handName(hand int) string {
+	if hand == xr.Left {
+		return "left"
+	}
+	return "right"
+}
+
+// handAimReady reports whether that hand currently has a usable ray.
+func (a *app) handAimReady(hand int) bool {
+	if hand == xr.Left {
+		return a.leftAimOK
+	}
+	return a.rAimOK
+}
+
+func (a *app) setFireHand(hand int) {
+	if a.fireHand == hand {
+		return
+	}
+	a.fireHand = hand
+	if a.vrDebug {
+		log.Printf("fire hand -> %s (rt=%.2f lt=%.2f)", handName(hand), a.trigR, a.trigL)
+	}
 }
 
 // placeBoard builds the table frame for the current level: the table's origin
@@ -1200,7 +1429,6 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	if head, ok := a.headPose(); ok {
 		hp = fmt.Sprintf("(%.2f,%.2f,%.2f)", head[12], head[13], head[14])
 	}
-	_, _, leftOK := vr.Controller(vr.LeftHand)
 	aim := "miss:" + a.aimNote
 	if a.aimOK {
 		aim = fmt.Sprintf("o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", a.aimO[0], a.aimO[1], a.aimO[2], a.aimD[0], a.aimD[1], a.aimD[2])
@@ -1218,7 +1446,8 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 		p := xr.EyePose(0)
 		eyaw = float64(mgl32.RadToDeg(float32(math.Atan2(float64(p[8]), float64(p[10])))))
 	}
-	log.Printf("vr head=%s yaw=%.1f eyaw=%.1f dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v height=%.2f tilt=%.1f frames=%d", hp, yaw, eyaw, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.tableY, a.tiltDeg, a.vrFrames)
+	log.Printf("vr head=%s yaw=%.1f eyaw=%.1f dev=%d devO=%s lpose=%v right=%v aim=%s rt=%.2f lt=%.2f btn=%v height=%.2f tilt=%.1f frames=%d",
+		hp, yaw, eyaw, dev, devO, a.leftHandPoseOK, rightOK, aim, st.TriggerAxis, a.trigL, st.Trigger, a.tableY, a.tiltDeg, a.vrFrames)
 	a.vrFrames = 0
 }
 

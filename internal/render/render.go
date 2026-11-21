@@ -252,9 +252,10 @@ type Renderer struct {
 	seam        *Mesh
 	hand        [2][]*Mesh // one entry per controller node (body, buttons, ...)
 	handTex     [2][]uint32
-	handHidden  bool    // uploads stay, drawing is skipped
-	handTrigger [2]int  // index of the trigger part, -1 when unknown
-	handGlow    float32 // 0..1 highlight on the trigger part
+	handHidden  bool   // uploads stay, drawing is skipped
+	handTrigger [2]int // index of the trigger part, -1 when unknown
+	handBlink   bool   // flash the trigger part (title-page "press me")
+	handBlinkOn bool   // current phase of that flash
 	handName    string
 	// handOffset places a runtime-supplied controller mesh inside the grip
 	// pose; XR_EXT_render_model reports it as the model space.
@@ -567,8 +568,14 @@ func (r *Renderer) MarkControllerTrigger(hand int) {
 	r.handTrigger[hand] = len(r.hand[hand]) - 1
 }
 
-// SetControllerTriggerGlow sets the 0..1 highlight applied to the trigger part.
-func (r *Renderer) SetControllerTriggerGlow(v float32) { r.handGlow = v }
+// SetControllerTriggerBlink makes the trigger part flash while the title page
+// waits for a press. The part is drawn with and without its texture rather than
+// merely brightened: the asset's map is near-black, so a brighter tint on it is
+// invisible.
+func (r *Renderer) SetControllerTriggerBlink(on, lit bool) {
+	r.handBlink = on
+	r.handBlinkOn = lit
+}
 
 // SetControllerHidden keeps the uploaded controller meshes but stops drawing
 // them: used to check whether a visible shell comes from us or from elsewhere.
@@ -644,13 +651,21 @@ func (r *Renderer) drawController(hand int, pose mgl32.Mat4) {
 	}
 	if len(r.hand[hand]) > 0 && !r.handHidden {
 		r.meshProg.Mat4(r.uModel, pose)
-		r.meshProg.Vec4(r.uTint, 0.62, 0.66, 0.74, 1)
 		r.meshProg.Float(r.uGloss, 0.30)
 		r.meshProg.Float(r.uUnlit, 0)
 		for i, m := range r.hand[hand] {
 			tex := uint32(0)
 			if i < len(r.handTex[hand]) {
 				tex = r.handTex[hand][i]
+			}
+			tint := [3]float32{0.62, 0.66, 0.74}
+			// The trigger flashes by dropping its texture: the asset's map is
+			// near-black, so brightening it barely reads, while an untextured
+			// part is drawn flat and unmistakable.
+			flash := r.handBlink && r.handBlinkOn && r.handTrigger[hand] == i
+			if flash {
+				tex = 0
+				tint = [3]float32{1.0, 0.80, 0.32}
 			}
 			if tex != 0 {
 				gl.ActiveTexture(gl.Texture0)
@@ -659,17 +674,35 @@ func (r *Renderer) drawController(hand int, pose mgl32.Mat4) {
 			} else {
 				r.meshProg.Float(r.uUseTex, 0)
 			}
-			if r.handTrigger[hand] == i && r.handGlow > 0 {
-				g := r.handGlow
-				r.meshProg.Vec4(r.uTint, 0.62+0.38*g, 0.66+0.24*g, 0.74-0.44*g, 1)
-			}
+			r.meshProg.Vec4(r.uTint, tint[0], tint[1], tint[2], 1)
 			m.draw()
-			if r.handTrigger[hand] == i && r.handGlow > 0 {
-				r.meshProg.Vec4(r.uTint, 0.62, 0.66, 0.74, 1)
-			}
 		}
 		r.meshProg.Float(r.uUseTex, 0)
 	}
+}
+
+// DrawControllers draws the controller meshes on their own. The title page
+// shows them over the poster -- the hands are already in the room before the
+// board exists, and their trigger buttons blink to invite the start press.
+func (r *Renderer) DrawControllers(vp mgl32.Mat4, cam mgl32.Vec3, hand mgl32.Mat4, handOK bool) {
+	if r.handHidden {
+		return
+	}
+	r.meshProg.Bind()
+	r.meshProg.Mat4(r.uVP, vp)
+	r.meshProg.Vec3(r.uCam, cam[0], cam[1], cam[2])
+	r.meshProg.Float(r.uUseTex, 0)
+	r.meshProg.Float(r.uBall, 0)
+	gl.Enable(gl.DepthTest)
+	gl.Enable(gl.CullFace)
+	gl.CullFaceMode(gl.Back)
+	if r.leftOK {
+		r.drawController(0, r.leftPose)
+	}
+	if handOK {
+		r.drawController(1, hand)
+	}
+	r.meshProg.Float(r.uUseTex, 0)
 }
 
 // Draw renders the round. world places the table (it carries the tilt); hud is
@@ -1173,6 +1206,16 @@ func (r *Renderer) NewTexture(img image.Image) uint32 {
 			pix[i+2] = byte(bb >> 8)
 			pix[i+3] = byte(aa >> 8)
 		}
+	}
+	return r.NewTextureRGBA(w, h, pix)
+}
+
+// NewTextureRGBA uploads an already decoded RGBA8 buffer. The controller loader
+// decodes its 2k PNGs on a worker goroutine, so the render thread only pays for
+// the upload itself.
+func (r *Renderer) NewTextureRGBA(w, h int, pix []byte) uint32 {
+	if w <= 0 || h <= 0 || len(pix) < w*h*4 {
+		return 0
 	}
 	tex := gl.GenTexture()
 	gl.BindTexture(gl.Texture2D, tex)
