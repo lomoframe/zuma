@@ -33,6 +33,8 @@ XrSession g_session = XR_NULL_HANDLE;
 XrSpace g_local = XR_NULL_HANDLE;
 XrSpace g_viewSpace = XR_NULL_HANDLE;
 XrEnvironmentBlendMode g_blend = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+static bool g_alphaSupported = false;  // runtime listed ALPHA_BLEND
+static bool g_dpad[4] = {false, false, false, false};  // up, down, left, right
 XrSessionState g_state = XR_SESSION_STATE_UNKNOWN;
 bool g_sessionRunning = false;
 bool g_quit = false;
@@ -67,6 +69,11 @@ struct HandActions {
     XrAction gripPose = XR_NULL_HANDLE;
     XrAction aimPose = XR_NULL_HANDLE;
     XrAction haptic = XR_NULL_HANDLE;
+    // Left d-pad: any direction toggles passthrough.
+    XrAction dpadUp = XR_NULL_HANDLE;
+    XrAction dpadDown = XR_NULL_HANDLE;
+    XrAction dpadLeft = XR_NULL_HANDLE;
+    XrAction dpadRight = XR_NULL_HANDLE;
 };
 
 HandActions g_actions;
@@ -162,8 +169,10 @@ XrResult pickBlendMode(XrInstance instance, XrSystemId system) {
     if (XR_FAILED(r)) return r;
     g_blend = modes[0];
     for (uint32_t i = 0; i < count; i++)
-        if (modes[i] == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)
+        if (modes[i] == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND) {
             g_blend = XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+            g_alphaSupported = true;
+        }
     return XR_SUCCESS;
 }
 
@@ -335,6 +344,14 @@ void suggestBindings() {
                 add(g_actions.triggerClick, "trigger/click");
                 add(g_actions.stick, "thumbstick");
                 add(g_actions.stickClick, "thumbstick/click");
+                if (hand == 0) {
+                    // The frame controller d-pad only exists on the left hand;
+                    // any of its four directions toggles passthrough.
+                    add(g_actions.dpadUp, "dpad_up/click");
+                    add(g_actions.dpadDown, "dpad_down/click");
+                    add(g_actions.dpadLeft, "dpad_left/click");
+                    add(g_actions.dpadRight, "dpad_right/click");
+                }
                 if (!profile.faceRightOnly || hand == 1) {
                     add(g_actions.a, "a/click");
                     add(g_actions.b, "b/click");
@@ -386,6 +403,10 @@ bool setupActions(XrSession session) {
     g_actions.gripPose = makeAction(g_actionSet, XR_ACTION_TYPE_POSE_INPUT, "grip_pose");
     g_actions.aimPose = makeAction(g_actionSet, XR_ACTION_TYPE_POSE_INPUT, "aim_pose");
     g_actions.haptic = makeAction(g_actionSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic");
+    g_actions.dpadUp = makeAction(g_actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "dpad_up");
+    g_actions.dpadDown = makeAction(g_actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "dpad_down");
+    g_actions.dpadLeft = makeAction(g_actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "dpad_left");
+    g_actions.dpadRight = makeAction(g_actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT, "dpad_right");
     suggestBindings();
 
     XrSessionActionSetsAttachInfo attach;
@@ -823,6 +844,18 @@ int xr_sync_input(double display_time) {
         g_buttonAbxy[hand][1] = readBool(ha.b);
         g_buttonAbxy[hand][2] = readBool(ha.x);
         g_buttonAbxy[hand][3] = readBool(ha.y);
+        if (hand == 0) {
+            const bool u = readBool(ha.dpadUp);
+            const bool d = readBool(ha.dpadDown);
+            const bool l = readBool(ha.dpadLeft);
+            const bool r = readBool(ha.dpadRight);
+            if (u != g_dpad[0] || d != g_dpad[1] || l != g_dpad[2] || r != g_dpad[3])
+                fprintf(stderr, "xr: dpad %d%d%d%d\n", u ? 1 : 0, d ? 1 : 0, l ? 1 : 0, r ? 1 : 0);
+            g_dpad[0] = u;
+            g_dpad[1] = d;
+            g_dpad[2] = l;
+            g_dpad[3] = r;
+        }
 
         gi = stateInfo(ha.stick);
         XrActionStateVector2f v;
@@ -866,6 +899,20 @@ float xr_hand_trigger(int hand) {
 
 int xr_hand_trigger_click(int hand) {
     return (hand == 0 || hand == 1) ? (g_triggerClick[hand] ? 1 : 0) : 0;
+}
+
+int xr_dpad_any(void) {
+    return (g_dpad[0] || g_dpad[1] || g_dpad[2] || g_dpad[3]) ? 1 : 0;
+}
+
+// xr_set_passthrough switches the environment blend mode at runtime: alpha
+// blend shows the headset cameras wherever the app leaves pixels transparent.
+void xr_set_passthrough(int on) {
+    if (on && g_alphaSupported) {
+        g_blend = XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+    } else {
+        g_blend = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    }
 }
 
 void xr_hand_stick(int hand, float *x, float *y) {

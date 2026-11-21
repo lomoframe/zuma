@@ -157,6 +157,19 @@ func ModelPose(hand int, t float64) (mgl32.Mat4, bool) {
 	return mat34(raw), true
 }
 
+// DpadAny reports whether any left-hand d-pad direction is held.
+func DpadAny() bool { return C.xr_dpad_any() != 0 }
+
+// SetPassthrough switches the environment blend mode at runtime: on shows the
+// headset cameras wherever the app leaves pixels transparent.
+func SetPassthrough(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.xr_set_passthrough(v)
+}
+
 // Hands, as the runtime names the subaction paths.
 const (
 	Left  = 0

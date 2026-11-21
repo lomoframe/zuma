@@ -54,6 +54,12 @@ int xr_end_frame(double display_time);
 /* Controller input. sync runs once per frame, after xr_wait_frame. hand is 0 for
  * left and 1 for right. */
 int xr_sync_input(double display_time);
+/* Any d-pad direction held (left hand). */
+int xr_dpad_any(void);
+
+/* Switch environment blend mode at runtime (1 = alpha blend passthrough). */
+void xr_set_passthrough(int on);
+
 float xr_hand_trigger(int hand);
 int xr_hand_trigger_click(int hand);
 void xr_hand_stick(int hand, float *x, float *y);

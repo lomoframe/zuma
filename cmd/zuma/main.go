@@ -82,6 +82,8 @@ type app struct {
 	ctrlOffsetOK    [2]bool
 	ctrlTip         [2]mgl32.Vec3
 	ctrlTipOK       [2]bool
+	dpadPrev        bool // left d-pad edge detector for the passthrough toggle
+	dpadAt          float64
 	modelPoseLogged bool
 	lastDev         int
 	modelState      int
@@ -584,6 +586,7 @@ func (a *app) enableVR() bool {
 	if a.xrOn {
 		log.Printf("OpenXR active: %dx%d per eye, msaa %dx, blend %d format 0x%x (passthrough %v, single client)",
 			ew, eh, a.msaa, xr.BlendMode(), format, a.xrPassthrough)
+		xr.SetPassthrough(a.xrPassthrough) // align the blend mode with the clear colour
 	} else {
 		log.Printf("VR active: %dx%d per eye, msaa %dx", ew, eh, a.msaa)
 	}
@@ -1036,6 +1039,20 @@ func (a *app) updateVRAim(now float64) {
 		a.leftHandPose, a.leftHandPoseOK = lh.Pose, lh.PoseOK
 	} else {
 		a.leftHandPoseOK = false
+	}
+
+	// Left d-pad: any direction toggles passthrough. Only click edges count
+	// (its touch surface covers all four directions at once), with a short
+	// cooldown against bounce.
+	if a.xrOn && !a.vrOn {
+		down := xr.DpadAny()
+		if down && !a.dpadPrev && now-a.dpadAt > 0.25 {
+			a.dpadAt = now
+			a.xrPassthrough = !a.xrPassthrough
+			xr.SetPassthrough(a.xrPassthrough)
+			log.Printf("passthrough -> %v", a.xrPassthrough)
+		}
+		a.dpadPrev = down
 	}
 
 	if st.Trigger && !a.prevTrig {
