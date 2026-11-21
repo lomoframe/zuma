@@ -35,47 +35,53 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn            bool
-	wantXR          bool
-	xrOn            bool    // display goes through an OpenXR session
-	xrPassthrough   bool    // clear the eye buffers transparent so the room shows
-	xrTime          float64 // this frame's predicted display time
-	eyes            [2]*gl.RenderTarget
-	board           mgl32.Mat4
-	boardInv        mgl32.Mat4
-	placedBoard     game.Board
-	tableY          float32 // table height: floor to the table origin, metres
-	winAdvanceAt    float64 // win screen: when the next level loads
-	tiltDeg         float32 // left stick: board tilt, degrees
-	lastAimT        float64
-	tableWorld      mgl32.Mat4
-	tilt            mgl32.Mat4
-	prevTrig        bool
-	vrAimOK         bool
-	vrAim           mgl32.Vec2
-	vrDebug         bool
-	vrcam           bool // documentation framing
-	vrFrames        int
-	lastVRLog       float64
-	showOrigin      bool
-	liftArmed       bool // right stick has been seen near neutral
-	tiltArmed       bool // left stick has been seen near neutral
-	vrRetryAt       float64
-	vrFailLog       float64
-	aimNote         string
-	aimO            mgl32.Vec3
-	aimD            mgl32.Vec3
-	aimOK           bool
-	aimFlip         bool
-	aimFlipSet      bool
-	flipSum         float32
-	flipN           int
-	aimSmooth       mgl32.Vec3
-	aimSmoothOK     bool
-	handPose        mgl32.Mat4
-	handPoseOK      bool
-	leftHandPose    mgl32.Mat4
-	leftHandPoseOK  bool
+	vrOn           bool
+	wantXR         bool
+	xrOn           bool    // display goes through an OpenXR session
+	xrPassthrough  bool    // clear the eye buffers transparent so the room shows
+	xrTime         float64 // this frame's predicted display time
+	eyes           [2]*gl.RenderTarget
+	board          mgl32.Mat4
+	boardInv       mgl32.Mat4
+	placedBoard    game.Board
+	tableY         float32 // table height: floor to the table origin, metres
+	winAdvanceAt   float64 // win screen: when the next level loads
+	tiltDeg        float32 // left stick: board tilt, degrees
+	lastAimT       float64
+	tableWorld     mgl32.Mat4
+	tilt           mgl32.Mat4
+	prevTrig       bool
+	vrAimOK        bool
+	vrAim          mgl32.Vec2
+	vrDebug        bool
+	vrcam          bool // documentation framing
+	vrFrames       int
+	lastVRLog      float64
+	showOrigin     bool
+	liftArmed      bool // right stick has been seen near neutral
+	tiltArmed      bool // left stick has been seen near neutral
+	vrRetryAt      float64
+	vrFailLog      float64
+	aimNote        string
+	aimO           mgl32.Vec3
+	aimD           mgl32.Vec3
+	aimOK          bool
+	aimFlip        bool
+	aimFlipSet     bool
+	flipSum        float32
+	flipN          int
+	aimSmooth      mgl32.Vec3
+	aimSmoothOK    bool
+	handPose       mgl32.Mat4
+	handPoseOK     bool
+	leftHandPose   mgl32.Mat4
+	leftHandPoseOK bool
+	// controller mesh: the aim ray leaves from the model, not the grip origin
+	ctrlVerts       [2][]mgl32.Vec3
+	ctrlOffset      [2]mgl32.Mat4
+	ctrlOffsetOK    [2]bool
+	ctrlTip         [2]mgl32.Vec3
+	ctrlTipOK       [2]bool
 	modelPoseLogged bool
 	lastDev         int
 	modelState      int
@@ -388,7 +394,9 @@ func main() {
 		// XR_EXT_render_model as glTF instead of SteamVR's render model API.
 		// Fetch and parse only for now; drawing comes next.
 		if a.xrOn && a.ctrlModel && a.modelState < 2 && xrReady && now >= a.ctrlModelAt {
-			a.ctrlModelAt = now + 5
+			// Retry quickly: the glTF fetch plus twelve 2k PNG decodes must
+			// land while the title page is up, not in the middle of a level.
+			a.ctrlModelAt = now + 0.5
 			loaded := true
 			for _, hand := range []int{xr.Left, xr.Right} {
 				data, err := xr.ModelGLTF(hand)
@@ -411,6 +419,8 @@ func main() {
 				// flat-shaded.
 				{
 					a.r.ResetControllerModel(hand)
+					a.ctrlVerts[hand] = a.ctrlVerts[hand][:0]
+					a.ctrlTipOK[hand] = false
 					for _, node := range doc.NodeNames() {
 						p, n, uv, ii, img, nerr := doc.NodeMesh(node)
 						if nerr != nil {
@@ -447,6 +457,11 @@ func main() {
 							continue
 						}
 						a.r.AddControllerNodeUV(hand, p, n, uv, ix, tex)
+						if hand == xr.Right {
+							for i := 0; i+2 < len(p); i += 3 {
+								a.ctrlVerts[hand] = append(a.ctrlVerts[hand], mgl32.Vec3{p[i], p[i+1], p[i+2]})
+							}
+						}
 						log.Printf("controller model hand %d %s: %d verts, %d tris", hand, node, len(p)/3, len(ix)/3)
 					}
 				}
@@ -972,6 +987,34 @@ func (a *app) updateVRAim(now float64) {
 		if d.Len() > 1e-4 {
 			d = d.Normalize()
 			o := mgl32.Vec3{pose[12], pose[13], pose[14]}
+			// Fire from the controller mesh itself: the vertex furthest along
+			// the aim direction, mapped through the runtime model space.
+			if a.xrOn && a.ctrlModel && a.modelState == 2 {
+				if mp, mok := xr.ModelPose(xr.Right, a.xrTime); mok {
+					a.ctrlOffset[xr.Right], a.ctrlOffsetOK[xr.Right] = mp, true
+					if !a.ctrlTipOK[xr.Right] && len(a.ctrlVerts[xr.Right]) > 0 {
+						wd := mp.Inv().Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
+						dm := mgl32.Vec3{wd[0], wd[1], wd[2]}
+						if dm.Len() > 1e-4 {
+							dm = dm.Normalize()
+							best := float32(-1e9)
+							var tip mgl32.Vec3
+							for _, v := range a.ctrlVerts[xr.Right] {
+								if k := v.Dot(dm); k > best {
+									best, tip = k, v
+								}
+							}
+							a.ctrlTip[xr.Right], a.ctrlTipOK[xr.Right] = tip, true
+							log.Printf("controller ray tip: local=(%.3f,%.3f,%.3f) reach=%.3f", tip[0], tip[1], tip[2], best)
+						}
+					}
+				}
+			}
+			if a.ctrlTipOK[xr.Right] {
+				tip := a.ctrlTip[xr.Right]
+				w := pose.Mul4(a.ctrlOffset[xr.Right]).Mul4x1(mgl32.Vec4{tip[0], tip[1], tip[2], 1})
+				o = mgl32.Vec3{w[0], w[1], w[2]}
+			}
 			a.lastDev = int(dev)
 			a.handPose = pose
 			a.handPoseOK = true

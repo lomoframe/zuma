@@ -652,20 +652,6 @@ func (r *Renderer) drawController(hand int, pose mgl32.Mat4) {
 		}
 		r.meshProg.Float(r.uUseTex, 0)
 	}
-	if hand != 1 {
-		return
-	}
-	o := mgl32.Vec3{pose[12], pose[13], pose[14]}
-	axes := [3]mgl32.Vec3{
-		{pose[0], pose[1], pose[2]},
-		{pose[4], pose[5], pose[6]},
-		{pose[8], pose[9], pose[10]},
-	}
-	cols := [3]mgl32.Vec4{rgba(1, 0.25, 0.25, 1), rgba(0.3, 1, 0.35, 1), rgba(0.35, 0.55, 1, 1)}
-	for i := 0; i < 3; i++ {
-		d := axes[i].Normalize()
-		r.drawBeamColored(mgl32.Ident4(), o, o.Add(d.Mul(0.09)), cols[i], 0.004)
-	}
 }
 
 // Draw renders the round. world places the table (it carries the tilt); hud is
