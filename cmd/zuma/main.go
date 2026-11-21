@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"runtime"
 	"time"
+	"unsafe"
 
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
@@ -16,6 +18,7 @@ import (
 	"zuma/internal/gl"
 	"zuma/internal/render"
 	"zuma/internal/vr"
+	"zuma/internal/xr"
 )
 
 // camera is the desktop orbit around the board.
@@ -29,41 +32,45 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn         bool
-	eyes         [2]*gl.RenderTarget
-	board        mgl32.Mat4
-	boardInv     mgl32.Mat4
-	placedBoard  game.Board
-	tableY       float32 // table height: floor to the table origin, metres
-	winAdvanceAt float64 // win screen: when the next level loads
-	tiltDeg      float32 // left stick: board tilt, degrees
-	lastAimT     float64
-	tableWorld   mgl32.Mat4
-	tilt         mgl32.Mat4
-	prevTrig     bool
-	vrAimOK      bool
-	vrAim        mgl32.Vec2
-	vrDebug      bool
-	vrcam        bool // documentation framing
-	vrFrames     int
-	lastVRLog    float64
-	vrRetryAt    float64
-	vrFailLog    float64
-	aimNote      string
-	aimO         mgl32.Vec3
-	aimD         mgl32.Vec3
-	aimOK        bool
-	aimFlip      bool
-	aimFlipSet   bool
-	flipSum      float32
-	flipN        int
-	aimSmooth    mgl32.Vec3
-	aimSmoothOK  bool
-	handPose     mgl32.Mat4
-	handPoseOK   bool
-	lastDev      int
-	modelState   int
-	msaa         int32
+	vrOn          bool
+	wantXR        bool
+	xrOn          bool    // display goes through an OpenXR session
+	xrPassthrough bool    // clear the eye buffers transparent so the room shows
+	xrTime        float64 // this frame's predicted display time
+	eyes          [2]*gl.RenderTarget
+	board         mgl32.Mat4
+	boardInv      mgl32.Mat4
+	placedBoard   game.Board
+	tableY        float32 // table height: floor to the table origin, metres
+	winAdvanceAt  float64 // win screen: when the next level loads
+	tiltDeg       float32 // left stick: board tilt, degrees
+	lastAimT      float64
+	tableWorld    mgl32.Mat4
+	tilt          mgl32.Mat4
+	prevTrig      bool
+	vrAimOK       bool
+	vrAim         mgl32.Vec2
+	vrDebug       bool
+	vrcam         bool // documentation framing
+	vrFrames      int
+	lastVRLog     float64
+	vrRetryAt     float64
+	vrFailLog     float64
+	aimNote       string
+	aimO          mgl32.Vec3
+	aimD          mgl32.Vec3
+	aimOK         bool
+	aimFlip       bool
+	aimFlipSet    bool
+	flipSum       float32
+	flipN         int
+	aimSmooth     mgl32.Vec3
+	aimSmoothOK   bool
+	handPose      mgl32.Mat4
+	handPoseOK    bool
+	lastDev       int
+	modelState    int
+	msaa          int32
 }
 
 // aimPitchDeg is how far the shot direction is pitched from the controller's
@@ -103,6 +110,8 @@ func main() {
 	height := flag.Int("height", 900, "window height")
 	desktop := flag.Bool("desktop", false, "force the desktop view even with a headset attached")
 	useVR := flag.Bool("vr", true, "render in SteamVR when a headset is present")
+	useXR := flag.Bool("xr", true, "use the OpenXR display path (needed for alpha-blend passthrough); falls back to OpenVR if it fails")
+	passthrough := flag.Bool("passthrough", true, "with -xr: clear the background transparent instead of painting it")
 	shot := flag.String("screenshot", "", "write a PNG before exiting (desktop view)")
 	frames := flag.Int("frames", 40, "frames to render before the screenshot")
 	seed := flag.Int64("seed", 0, "random seed (0 = time-based)")
@@ -127,6 +136,15 @@ func main() {
 		}
 	})
 	render.SetTextDebug(flag.Lookup("hud-debug").Value.String() == "true")
+
+	// The OpenXR loader only lives inside the SteamVR install on the frame, so
+	// point it at SteamVR's runtime manifest when nothing else did. A launcher
+	// (Steam) does not pass this through.
+	if os.Getenv("XR_RUNTIME_JSON") == "" {
+		if _, err := os.Stat("/opt/steamvr/steamxr_linuxarm64.json"); err == nil {
+			os.Setenv("XR_RUNTIME_JSON", "/opt/steamvr/steamxr_linuxarm64.json")
+		}
+	}
 
 	runtime.LockOSThread()
 	if err := glfw.Init(); err != nil {
@@ -202,6 +220,8 @@ func main() {
 		a.cam.dist = 4.6 // tighter documentation framing
 	}
 	a.msaa = int32(*msaa)
+	a.wantXR = *useXR
+	a.xrPassthrough = *passthrough
 	// Screenshots are a desktop feature: the compositor owns the headset.
 	canVR := *useVR && !*desktop && *shot == ""
 	if canVR {
@@ -291,7 +311,28 @@ func main() {
 			}
 		}
 
-		if a.vrOn {
+		xrReady := false
+		if a.xrOn {
+			if xr.Poll() {
+				log.Printf("OpenXR requested shutdown")
+				break
+			}
+			t, ok := xr.WaitFrame()
+			if ok {
+				xrReady = true
+				a.xrTime = t
+				if !xr.LocateViews(t) {
+					log.Printf("xrLocateViews failed")
+				}
+				if !xr.SyncInput(t) {
+					log.Printf("xrSyncActions failed")
+				}
+				if err := vr.WaitPoses(); err != nil {
+					log.Printf("WaitGetPoses: %v", err)
+				}
+				a.updateVRAim(now)
+			}
+		} else if a.vrOn {
 			if vr.QuitRequested() {
 				log.Printf("SteamVR requested shutdown")
 				break
@@ -337,7 +378,12 @@ func main() {
 				log.Printf("controller model unavailable")
 			}
 		}
-		if a.vrOn {
+		if a.xrOn {
+			if xrReady {
+				a.renderEyesXR(a.xrTime, now)
+			}
+			a.renderMirror(now)
+		} else if a.vrOn {
 			a.renderEyes(now)
 			a.renderMirror(now)
 		} else {
@@ -362,6 +408,9 @@ func main() {
 	if a.vrOn {
 		vr.Shutdown()
 	}
+	if a.xrOn {
+		xr.Shutdown()
+	}
 }
 
 // enableVR brings SteamVR up and allocates the eye targets. It is retried from
@@ -371,7 +420,26 @@ func (a *app) enableVR() bool {
 	if !vr.Present() {
 		return false
 	}
-	if err := vr.Init(); err != nil {
+	if a.wantXR && !a.xrOn {
+		if err := a.startXR(); err != nil {
+			log.Printf("OpenXR unavailable (%v) — falling back to OpenVR presentation", err)
+		}
+	}
+
+	var err error
+	if a.xrOn {
+		// OpenXR owns the display, so SteamVR is only an input client here:
+		// background mode keeps poses, buttons and render models without
+		// making the compositor wait on a second presenting app.
+		err = vr.InitInputOnly()
+	} else {
+		err = vr.Init()
+	}
+	if err != nil {
+		if a.xrOn {
+			xr.Shutdown()
+			a.xrOn = false
+		}
 		now := glfw.GetTime()
 		if now-a.vrFailLog > 10 {
 			a.vrFailLog = now
@@ -380,17 +448,42 @@ func (a *app) enableVR() bool {
 		return false
 	}
 	a.vrOn = true
+
 	ew, eh := vr.RenderTargetSize()
+	format := gl.RGBA8
+	if a.xrOn {
+		ew, eh = xr.Size()
+		format = xr.Format()
+	}
 	for eye := 0; eye < 2; eye++ {
-		rt, err := gl.NewRenderTarget(ew, eh, a.msaa)
+		rt, err := gl.NewRenderTargetFormat(ew, eh, a.msaa, format)
 		if err != nil {
 			log.Fatalf("eye render target: %v", err)
 		}
 		a.eyes[eye] = rt
 	}
 	glfw.SwapInterval(0)
-	log.Printf("VR active: %dx%d per eye, msaa %dx", ew, eh, a.msaa)
+	if a.xrOn {
+		log.Printf("OpenXR active: %dx%d per eye, msaa %dx, blend %d format 0x%x (passthrough %v)", ew, eh, a.msaa,
+			xr.BlendMode(), format, a.xrPassthrough)
+	} else {
+		log.Printf("VR active: %dx%d per eye, msaa %dx", ew, eh, a.msaa)
+	}
 	return true
+}
+
+// startXR opens the OpenXR session on the window's own GLX context.
+func (a *app) startXR() error {
+	dpy := glfw.GetX11Display()
+	if dpy == nil {
+		return fmt.Errorf("no X11 display")
+	}
+	xid := uintptr(currentWindow.GetX11Window())
+	if err := xr.Init(unsafe.Pointer(dpy), xid); err != nil {
+		return err
+	}
+	a.xrOn = true
+	return nil
 }
 
 // playEvents maps gameplay moments to the synthesised clips.
@@ -463,7 +556,7 @@ func (a *app) renderDesktop(now float64) {
 }
 
 func (a *app) renderMirror(now float64) {
-	head, ok := vr.Pose(0)
+	head, ok := a.headPose()
 	if !ok {
 		return
 	}
@@ -518,6 +611,54 @@ func (a *app) renderEyes(now float64) {
 func clearScene() {
 	gl.ClearColor(0.012, 0.020, 0.032, 1)
 	gl.Clear(gl.ColorBufferBit | gl.DepthBufferBit)
+}
+
+// clearEye clears the eye buffer for the OpenXR path. With passthrough on it
+// clears to transparent black so the runtime composites the room behind
+// whatever the game then draws.
+func (a *app) clearEye() {
+	if a.xrPassthrough {
+		gl.ClearColor(0, 0, 0, 0)
+	} else {
+		gl.ClearColor(0.012, 0.020, 0.032, 1)
+	}
+	gl.Clear(gl.ColorBufferBit | gl.DepthBufferBit)
+}
+
+// renderEyesXR draws both eyes into the runtime's swapchain images and submits
+// the projection layer, which is the path that can carry alpha.
+func (a *app) renderEyesXR(displayTime, now float64) {
+	for eye := 0; eye < 2; eye++ {
+		rt := a.eyes[eye]
+		if rt == nil {
+			continue
+		}
+		tex, ok := xr.Acquire(eye)
+		if !ok {
+			log.Printf("swapchain image unavailable for eye %d", eye)
+			continue
+		}
+		rt.SetColorTexture(tex)
+		proj := xr.Projection(eye, 0.05, 100)
+		pose := xr.EyePose(eye)
+		view := pose.Inv()
+		cam := mgl32.Vec3{pose[12], pose[13], pose[14]}
+		rt.Bind()
+		gl.Viewport(0, 0, rt.W, rt.H)
+		a.clearEye()
+		if a.r.SplashActive(now) {
+			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
+		} else {
+			a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+		}
+		rt.Resolve()
+		gl.Flush()
+		rt.Unbind()
+		a.vrFrames++
+	}
+	if err := xr.EndFrame(displayTime); err != nil {
+		log.Printf("xrEndFrame: %v", err)
+	}
 }
 
 // currentWindow lets the render helpers reach the GLFW window without threading
@@ -577,6 +718,37 @@ func (a *app) updateMouseAim(win *glfw.Window) {
 	}
 }
 
+// headPose is the head matrix from whichever backend owns the display.
+func (a *app) headPose() (mgl32.Mat4, bool) {
+	if a.xrOn {
+		return xr.HeadPose(a.xrTime)
+	}
+	return vr.Pose(0)
+}
+
+// rightPose is the right controller's grip pose.
+func (a *app) rightPose(dev uint32) (mgl32.Mat4, bool) {
+	if a.xrOn {
+		h := xr.Hand(xr.Right)
+		return h.Pose, h.PoseOK
+	}
+	return vr.Pose(int(dev))
+}
+
+// leftStick is the left controller's stick state.
+func (a *app) leftStick() (vr.ControllerState, bool) {
+	if a.xrOn {
+		h := xr.Hand(xr.Left)
+		if !h.PoseOK {
+			return vr.ControllerState{}, false
+		}
+		return vr.ControllerState{AxisX: h.StickX, AxisY: h.StickY,
+			Trigger: h.TriggerClick || h.Trigger > 0.5}, true
+	}
+	_, st, ok := vr.Controller(vr.LeftHand)
+	return st, ok
+}
+
 // updateVRAim takes the right controller's aim pose as the shot ray. When no
 // controller is tracked it falls back to the head gaze, so a laser is always
 // visible in the headset.
@@ -588,6 +760,25 @@ func (a *app) updateVRAim(now float64) {
 				dev, st, ok = uint32(d), s, true
 				break
 			}
+		}
+	}
+	if a.xrOn {
+		// SteamVR only delivers buttons to the app that owns the session's
+		// action bindings, so the background OpenVR client gets poses but
+		// never a trigger. Input therefore comes from the OpenXR actions.
+		right := xr.Hand(xr.Right)
+		if right.PoseOK {
+			st = vr.ControllerState{
+				AxisX:       right.StickX,
+				AxisY:       right.StickY,
+				TriggerAxis: right.Trigger,
+				Trigger:     right.TriggerClick || right.Trigger > 0.5,
+				A:           right.Buttons&xr.ButtonA != 0,
+				Stick:       right.Buttons&xr.ButtonStick != 0,
+			}
+			ok = true
+		} else {
+			ok = false
 		}
 	}
 	if !ok {
@@ -620,7 +811,7 @@ func (a *app) updateVRAim(now float64) {
 			a.placeBoard()
 		}
 		// Left stick up/down trims the board tilt: up flattens, down steepens.
-		if _, ls, lok := vr.Controller(vr.LeftHand); lok {
+		if ls, lok := a.leftStick(); lok {
 			if v := ls.AxisY; math.Abs(float64(v)) > 0.2 {
 				const tiltSpeed = 25.0 // degrees per second at full deflection
 				a.tiltDeg -= v * tiltSpeed * float32(dt)
@@ -630,7 +821,7 @@ func (a *app) updateVRAim(now float64) {
 		}
 	}
 
-	pose, poseOK := vr.Pose(int(dev))
+	pose, poseOK := a.rightPose(dev)
 	if poseOK {
 		th := mgl32.DegToRad(aimPitchDeg)
 		local := mgl32.Vec3{0, -float32(math.Sin(float64(th))), -float32(math.Cos(float64(th)))}
@@ -738,7 +929,7 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	}
 	a.lastVRLog = now
 	hp := "none"
-	if head, ok := vr.Pose(0); ok {
+	if head, ok := a.headPose(); ok {
 		hp = fmt.Sprintf("(%.2f,%.2f,%.2f)", head[12], head[13], head[14])
 	}
 	_, _, leftOK := vr.Controller(vr.LeftHand)

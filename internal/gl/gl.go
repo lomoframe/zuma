@@ -266,6 +266,13 @@ type RenderTarget struct {
 // NewRenderTarget builds a colour+depth target. samples is the MSAA sample
 // count; 0 or 1 means no multisampling.
 func NewRenderTarget(w, h, samples int32) (*RenderTarget, error) {
+	return NewRenderTargetFormat(w, h, samples, RGBA8)
+}
+
+// NewRenderTargetFormat is NewRenderTarget with an explicit colour format. The
+// OpenXR path uses it so the resolve blit writes into a texture with exactly
+// the swapchain's format, which glBlitFramebuffer requires.
+func NewRenderTargetFormat(w, h, samples int32, format uint32) (*RenderTarget, error) {
 	if samples < 0 {
 		samples = 0
 	}
@@ -275,7 +282,7 @@ func NewRenderTarget(w, h, samples int32) (*RenderTarget, error) {
 	rt.RBO = GenRenderbuffer()
 
 	BindTexture(Texture2D, rt.Tex)
-	TexImage2D(Texture2D, int32(RGBA8), w, h, RGBA, UnsignedByte, nil)
+	TexImage2D(Texture2D, int32(format), w, h, RGBA, UnsignedByte, nil)
 	TexParamI(Texture2D, TextureMinFilter, int32(Linear))
 	TexParamI(Texture2D, TextureMagFilter, int32(Linear))
 	TexParamI(Texture2D, TextureWrapS, int32(ClampToEdge))
@@ -300,7 +307,7 @@ func NewRenderTarget(w, h, samples int32) (*RenderTarget, error) {
 		rt.draw = GenFramebuffer()
 		color, depth := GenRenderbuffer(), GenRenderbuffer()
 		BindRenderbuffer(color)
-		RenderbufferStorageMS(RGBA8, w, h, samples)
+		RenderbufferStorageMS(format, w, h, samples)
 		BindRenderbuffer(depth)
 		RenderbufferStorageMS(DepthComponent24, w, h, samples)
 		BindRenderbuffer(0)
@@ -334,6 +341,17 @@ func (rt *RenderTarget) Resolve() {
 }
 
 func (rt *RenderTarget) Unbind() { BindFramebuffer(0) }
+
+// SetColorTexture points the single-sample framebuffer at an external colour
+// texture, such as an OpenXR swapchain image. Resolve blits the multisampled
+// frame into it, so one target can feed whichever image the runtime hands out.
+// The texture keeps the target's size; the caller must pass one of that size.
+func (rt *RenderTarget) SetColorTexture(tex uint32) {
+	BindFramebuffer(rt.FBO)
+	C.govr_fbo_texture_2d(C.uint(Framebuffer), C.uint(ColorAttachment0), C.uint(Texture2D), C.uint(tex))
+	BindFramebuffer(0)
+	rt.Tex = tex
+}
 
 func GenFramebuffer() uint32 {
 	var f C.uint

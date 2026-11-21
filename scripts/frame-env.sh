@@ -18,7 +18,9 @@ if [ -n "$sysroot" ] && [ -d "$sysroot/usr/lib" ]; then
 	CGO_CXXFLAGS="-O2 -g0 -ffunction-sections -fdata-sections -I$sysroot/usr/include -I$sysroot/usr/include/openvr"
 	# --allow-shlib-undefined: the OpenVR SDK's libopenvr_api.so leaves
 	# vr::CleanupInternalInterfaces for the SteamVR runtime to provide.
-	CGO_LDFLAGS="-L$sysroot/usr/lib -Wl,-rpath-link,$sysroot/usr/lib -Wl,-rpath,\$ORIGIN -Wl,--allow-shlib-undefined -Wl,--gc-sections -Wl,--as-needed"
+	# The OpenXR loader only exists in SteamVR's bin dir, which Steam does not
+	# put on LD_LIBRARY_PATH, so that path is baked in as well.
+	CGO_LDFLAGS="-L$sysroot/usr/lib -Wl,-rpath-link,$sysroot/usr/lib -Wl,-rpath,\$ORIGIN -Wl,-rpath,/opt/steamvr/bin/linuxarm64 -Wl,--allow-shlib-undefined -Wl,--gc-sections -Wl,--as-needed"
 	PKG_CONFIG_SYSROOT_DIR="$sysroot"
 	PKG_CONFIG_LIBDIR="$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig"
 	export CGO_CFLAGS CGO_CXXFLAGS CGO_LDFLAGS PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_LIBDIR
