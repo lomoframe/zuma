@@ -121,6 +121,8 @@ XrResult createInstance(Display *dpy, XrInstance *out) {
     // The loader headers are newer than the runtime: 1.1 is rejected with
     // XR_ERROR_API_VERSION_UNSUPPORTED, 1.0 is what SteamVR implements.
     ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    // Only the graphics binding: nothing else is enabled, so the runtime cannot
+    // apply any extra space adjustment on our behalf.
     const char *exts[1] = {kGLXExtension};
     ci.enabledExtensionCount = 1;
     ci.enabledExtensionNames = exts;
@@ -161,6 +163,40 @@ XrResult pickSwapchainFormat(XrSession session, int64_t *out) {
     }
     *out = chosen;
     return XR_SUCCESS;
+}
+
+// Creates the space the game works in. STAGE is the one whose origin sits on
+// the floor, which is what "table height" means here; LOCAL is anchored at the
+// headset, so using it puts a 0.5 m table at eye level.
+XrResult createBaseSpace(XrSession session, XrSpace *out) {
+    uint32_t count = 0;
+    XrResult r = xrEnumerateReferenceSpaces(session, 0, &count, nullptr);
+    if (XR_SUCCEEDED(r) && count > 0) {
+        std::vector<XrReferenceSpaceType> types(count);
+        uint32_t used = 0;
+        if (XR_SUCCEEDED(xrEnumerateReferenceSpaces(session, count, &used, types.data()))) {
+            for (uint32_t i = 0; i < used; i++)
+                fprintf(stderr, "xr: reference space %d\n", (int)types[i]);
+        }
+    }
+
+    XrReferenceSpaceCreateInfo ci;
+    memset(&ci, 0, sizeof ci);
+    ci.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
+    ci.poseInReferenceSpace.orientation.w = 1.0f;
+
+    // STAGE follows the play area exactly once. LOCAL_FLOOR looked like the
+    // "raw" frame but SteamVR recentring moved it twice, so it is only a
+    // fallback here.
+    ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+    r = xrCreateReferenceSpace(session, &ci, out);
+    if (XR_SUCCEEDED(r)) {
+        fprintf(stderr, "xr: using STAGE space (floor origin)\n");
+        return r;
+    }
+    fprintf(stderr, "xr: STAGE space -> %d, falling back to LOCAL\n", (int)r);
+    ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    return xrCreateReferenceSpace(session, &ci, out);
 }
 
 // Creates both eye swapchains plus their GL images. The renderer draws into
@@ -468,17 +504,16 @@ int xr_init(void *xdisplay, unsigned long xid, char *err, int errlen) {
         return 0;
     }
 
+    r = createBaseSpace(g_session, &g_local);
+    if (XR_FAILED(r)) {
+        setErr(err, errlen, "xrCreateReferenceSpace", r);
+        return 0;
+    }
     XrReferenceSpaceCreateInfo rsci;
     memset(&rsci, 0, sizeof rsci);
     rsci.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
-    rsci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
-    rsci.poseInReferenceSpace.orientation.w = 1.0f;
-    r = xrCreateReferenceSpace(g_session, &rsci, &g_local);
-    if (XR_FAILED(r)) {
-        setErr(err, errlen, "xrCreateReferenceSpace(LOCAL)", r);
-        return 0;
-    }
     rsci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    rsci.poseInReferenceSpace.orientation.w = 1.0f;
     r = xrCreateReferenceSpace(g_session, &rsci, &g_viewSpace);
     if (XR_FAILED(r)) {
         setErr(err, errlen, "xrCreateReferenceSpace(VIEW)", r);

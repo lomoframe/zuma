@@ -54,6 +54,9 @@ type app struct {
 	vrcam         bool // documentation framing
 	vrFrames      int
 	lastVRLog     float64
+	showOrigin    bool
+	liftArmed     bool // right stick has been seen near neutral
+	tiltArmed     bool // left stick has been seen near neutral
 	vrRetryAt     float64
 	vrFailLog     float64
 	aimNote       string
@@ -112,6 +115,7 @@ func main() {
 	useVR := flag.Bool("vr", true, "render in SteamVR when a headset is present")
 	useXR := flag.Bool("xr", true, "use the OpenXR display path (needed for alpha-blend passthrough); falls back to OpenVR if it fails")
 	passthrough := flag.Bool("passthrough", true, "with -xr: clear the background transparent instead of painting it")
+	showOrigin := flag.Bool("origin", false, "draw the world origin axes (+X red, +Y green, +Z blue)")
 	shot := flag.String("screenshot", "", "write a PNG before exiting (desktop view)")
 	frames := flag.Int("frames", 40, "frames to render before the screenshot")
 	seed := flag.Int64("seed", 0, "random seed (0 = time-based)")
@@ -222,6 +226,7 @@ func main() {
 	a.msaa = int32(*msaa)
 	a.wantXR = *useXR
 	a.xrPassthrough = *passthrough
+	a.showOrigin = *showOrigin
 	// Screenshots are a desktop feature: the compositor owns the headset.
 	canVR := *useVR && !*desktop && *shot == ""
 	if canVR {
@@ -553,6 +558,9 @@ func (a *app) renderDesktop(now float64) {
 	}
 	a.r.DrawStatic(vp, mgl32.Ident4())
 	a.r.Draw(vp, eye, a.tilt, mgl32.Ident4(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+	if a.showOrigin {
+		a.drawOrigin(vp)
+	}
 }
 
 func (a *app) renderMirror(now float64) {
@@ -574,6 +582,9 @@ func (a *app) renderMirror(now float64) {
 	}
 	a.r.DrawStatic(proj.Mul4(view), a.board)
 	a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+	if a.showOrigin {
+		a.drawOrigin(proj.Mul4(view))
+	}
 }
 
 func (a *app) renderEyes(now float64) {
@@ -597,6 +608,9 @@ func (a *app) renderEyes(now float64) {
 			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
 		} else {
 			a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+			if a.showOrigin {
+				a.drawOrigin(proj.Mul4(view))
+			}
 		}
 		rt.Resolve()
 		gl.Flush()
@@ -650,6 +664,9 @@ func (a *app) renderEyesXR(displayTime, now float64) {
 			a.r.DrawSplash(proj.Mul4(view), render.SplashPanel(), now)
 		} else {
 			a.r.Draw(proj.Mul4(view), cam, a.board, a.hudFrame(), a.g, now, a.aimO, a.aimD, a.aimOK, a.handPose, a.handPoseOK)
+			if a.showOrigin {
+				a.drawOrigin(proj.Mul4(view))
+			}
 		}
 		rt.Resolve()
 		gl.Flush()
@@ -716,6 +733,21 @@ func (a *app) updateMouseAim(win *glfw.Window) {
 		a.aimO = mgl32.Vec3{1.05, 1.32, 0.35}
 		a.aimD = mgl32.Vec3{0.05, 1.05, -1.55}.Sub(a.aimO).Normalize()
 	}
+}
+
+// drawOrigin is the -origin debug overlay: world axes plus a marker showing
+// where the table centre should be if the scene follows the runtime exactly.
+func (a *app) drawOrigin(vp mgl32.Mat4) {
+	head, ok := a.mustHead()
+	a.r.DrawAxes(vp, head, ok)
+}
+
+// mustHead is headPose with a usable fallback, for debug overlays.
+func (a *app) mustHead() (mgl32.Mat4, bool) {
+	if head, ok := a.headPose(); ok {
+		return head, true
+	}
+	return mgl32.Ident4(), false
 }
 
 // headPose is the head matrix from whichever backend owns the display.
@@ -805,14 +837,21 @@ func (a *app) updateVRAim(now float64) {
 			dt = 1.0 / 90.0
 		}
 		a.lastAimT = now
-		if v := st.AxisY; math.Abs(float64(v)) > 0.2 {
+		// A stick that already reads deflection when the app starts (hand
+		// resting on it) must not slam the table to its limit: each axis is
+		// only trusted after it has been seen near neutral once.
+		if !a.liftArmed {
+			a.liftArmed = math.Abs(float64(st.AxisY)) < 0.2
+		} else if v := st.AxisY; math.Abs(float64(v)) > 0.2 {
 			a.tableY += v * liftSpeed * float32(dt)
 			a.tableY = float32(math.Max(tableMinY, math.Min(tableMaxY, float64(a.tableY))))
 			a.placeBoard()
 		}
 		// Left stick up/down trims the board tilt: up flattens, down steepens.
 		if ls, lok := a.leftStick(); lok {
-			if v := ls.AxisY; math.Abs(float64(v)) > 0.2 {
+			if !a.tiltArmed {
+				a.tiltArmed = math.Abs(float64(ls.AxisY)) < 0.2
+			} else if v := ls.AxisY; math.Abs(float64(v)) > 0.2 {
 				const tiltSpeed = 25.0 // degrees per second at full deflection
 				a.tiltDeg -= v * tiltSpeed * float32(dt)
 				a.tiltDeg = float32(math.Max(0, math.Min(35, float64(a.tiltDeg))))
@@ -941,7 +980,16 @@ func (a *app) logVR(now float64, st vr.ControllerState, rightOK bool, dev uint32
 	if a.handPoseOK {
 		devO = fmt.Sprintf("(%.2f,%.2f,%.2f)", a.handPose[12], a.handPose[13], a.handPose[14])
 	}
-	log.Printf("vr head=%s dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v height=%.2f tilt=%.1f frames=%d", hp, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.tableY, a.tiltDeg, a.vrFrames)
+	yaw := 0.0
+	if head, ok := a.headPose(); ok {
+		yaw = float64(mgl32.RadToDeg(float32(math.Atan2(float64(head[8]), float64(head[10])))))
+	}
+	eyaw := 0.0
+	if a.xrOn {
+		p := xr.EyePose(0)
+		eyaw = float64(mgl32.RadToDeg(float32(math.Atan2(float64(p[8]), float64(p[10])))))
+	}
+	log.Printf("vr head=%s yaw=%.1f eyaw=%.1f dev=%d devO=%s left=%v right=%v aim=%s trig=%.2f btn=%v height=%.2f tilt=%.1f frames=%d", hp, yaw, eyaw, dev, devO, leftOK, rightOK, aim, st.TriggerAxis, st.Trigger, a.tableY, a.tiltDeg, a.vrFrames)
 	a.vrFrames = 0
 }
 

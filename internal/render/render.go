@@ -388,8 +388,10 @@ func buildBeam() *Builder {
 		c := a + 1
 		d := a + 2
 		e := a + 3
-		b.tri(a, e, c)
-		b.tri(a, d, e)
+		// Same winding as Builder.sphere so the tube faces outwards under
+		// back-face culling; the mirrored order left only the inner wall.
+		b.tri(a, c, e)
+		b.tri(a, e, d)
 	}
 	return b
 }
@@ -819,6 +821,37 @@ func (r *Renderer) drawBeamColored(world mgl32.Mat4, from, to mgl32.Vec3, col mg
 	r.meshProg.Float(r.uUnlit, 1)
 	r.beam.draw()
 	r.meshProg.Float(r.uUnlit, 0)
+}
+
+// DrawAxes paints the world origin so the scene's anchor can be checked:
+// +X red, +Y green, +Z blue, one metre each. Depth testing is off so the table
+// cannot hide the horizontal axes, and the mesh program is bound first because
+// Draw is not the caller.
+func (r *Renderer) DrawAxes(vp, head mgl32.Mat4, headOK bool) {
+	r.meshProg.Bind()
+	gl.Disable(gl.DepthTest)
+	defer func() {
+		gl.Enable(gl.DepthTest)
+	}()
+	r.meshProg.Mat4(r.uVP, vp)
+	r.meshProg.Float(r.uBall, 0)
+	o := mgl32.Vec3{}
+	r.drawBeamColored(mgl32.Ident4(), o, mgl32.Vec3{1, 0, 0}, rgba(0.95, 0.25, 0.25, 1), 0.02)
+	r.drawBeamColored(mgl32.Ident4(), o, mgl32.Vec3{0, 1, 0}, rgba(0.30, 0.95, 0.35, 1), 0.02)
+	r.drawBeamColored(mgl32.Ident4(), o, mgl32.Vec3{0, 0, 1}, rgba(0.30, 0.55, 1.0, 1), 0.02)
+
+	// Where the table centre should be if the scene simply follows the runtime:
+	// 1.55 m along the head's forward, at felt height.
+	if headOK {
+		f := mgl32.Vec3{-head[8], 0, -head[10]}
+		if l := f.Len(); l > 1e-4 {
+			f = f.Mul(1 / l)
+			p := mgl32.Vec3{head[12], 0, head[14]}.Add(f.Mul(1.55))
+			p[1] = 0.5
+			r.drawRingAt(mgl32.Ident4(), p, 0.14, rgba(1, 1, 1, 1))
+			r.drawBeamColored(mgl32.Ident4(), p, p.Add(mgl32.Vec3{0, 0.6, 0}), rgba(1, 1, 1, 1), 0.008)
+		}
+	}
 }
 
 func (r *Renderer) drawRingAt(world mgl32.Mat4, at mgl32.Vec3, radius float32, col mgl32.Vec4) {
