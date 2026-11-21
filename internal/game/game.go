@@ -291,6 +291,13 @@ func (g *Game) colourOnBoard(c, n int) bool {
 			return true
 		}
 	}
+	// Beads that have not left the hole yet are part of the chain to come, so
+	// their colours stay live even while the table is empty.
+	for _, q := range g.Queue {
+		if q == c {
+			return true
+		}
+	}
 	return false
 }
 

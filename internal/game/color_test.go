@@ -66,3 +66,29 @@ func TestBallInFlightCountsAsLive(t *testing.T) {
 		}
 	}
 }
+
+// TestQueuedBeadsCountAsLive keeps colours that are still in the hole alive:
+// after a full-chain retreat the table is empty but the beads are queued, so
+// the launcher must not start dealing from a reduced palette.
+func TestQueuedBeadsCountAsLive(t *testing.T) {
+	g := New(1)
+	g.Shots = nil
+	g.Balls = nil
+	g.Queue = []int{1, 3}
+	for i := 0; i < 400; i++ {
+		if c := g.pickColor(4); c != 1 && c != 3 {
+			t.Fatalf("handed out colour %d, which is neither on the chain nor queued", c)
+		}
+	}
+	// Directly: a colour that only exists in the queue counts as live, and one
+	// that exists nowhere does not.
+	g.Balls = nil
+	g.Shots = nil
+	g.Queue = []int{2}
+	if !g.colourOnBoard(2, 4) {
+		t.Fatalf("queued colour 2 reported dead")
+	}
+	if g.colourOnBoard(0, 4) {
+		t.Fatalf("colour 0 is nowhere and reported live")
+	}
+}
