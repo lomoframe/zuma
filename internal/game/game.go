@@ -80,6 +80,7 @@ const (
 	EventShoot EventKind = iota
 	EventInsert
 	EventMatch
+	EventKnock
 	EventLose
 	EventWin
 	EventLevel
@@ -674,6 +675,7 @@ func (g *Game) stepChain(dt float32) {
 				if g.pendingKnock > 0 {
 					g.KnockVel = clampKnock(g.KnockVel - g.pendingKnock)
 					g.pendingKnock = 0
+					g.Events = append(g.Events, Event{Kind: EventKnock, Value: g.Combo})
 				}
 				g.matchAt(idx)
 			}
@@ -858,6 +860,7 @@ func (g *Game) matchAt(idx int) {
 			g.pendingKnock += impulse
 		} else {
 			g.KnockVel = clampKnock(g.KnockVel - impulse)
+			g.Events = append(g.Events, Event{Kind: EventKnock, Value: g.Combo})
 		}
 	}
 	if lo > 0 && lo < len(g.Balls) && aheadID >= 0 {

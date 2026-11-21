@@ -217,8 +217,11 @@ func Hand(hand int) HandState {
 	return st
 }
 
-// Haptic pulses one controller.
-func Haptic(hand int, amplitude float32) { C.xr_haptic(C.int(hand), C.float(amplitude)) }
+// Haptic pulses one controller: amplitude 0..1, frequency in Hz (0 = runtime
+// default), seconds = how long the pulse lasts.
+func Haptic(hand int, amplitude, frequency, seconds float32) {
+	C.xr_haptic(C.int(hand), C.float(amplitude), C.float(frequency), C.double(seconds))
+}
 
 // EndFrame releases the acquired images and submits the projection layer.
 func EndFrame(t float64) error {

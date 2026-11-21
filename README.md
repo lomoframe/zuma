@@ -26,6 +26,11 @@ start-up.
 - **Hand-tracked aiming**: the launcher sits in the right hand; aim by pointing
   the controller, fire with the trigger. The ball is a real projectile with
   gravity, not a raycast hit.
+- **Controller rumble**: every beat has its own buzz — a short tick for the
+  shot, a crisp click when the bead locks into the chain, a longer and deeper
+  thump for a clear (louder the higher the combo), a two-handed slam with a
+  short aftershock when a combo knocks the chain back, and a rising four-note
+  arpeggio in both hands for the win.
 - **Room-scale presentation**: the playfield stands on a table in front of you,
   tilted back 20° like a pinball playfield; the title screen is anchored at a
   fixed spot in the room, so looking around moves the view past it instead of
@@ -230,6 +235,9 @@ changing any on-screen text.
   1728×1728、4× MSAA、约 120 fps。
 - **手柄操作**：待发的球握在右手，指向即瞄准，扣扳机发射（真弹道，带重力）；
   射线末端不画准星——射线停在哪颗球上就插在哪。
+- **手柄震动**：每个动作各有手感——射击是一下短促轻点、球插进链是一下清脆的
+  咔哒、消球更长更闷且随连击加重、连击把整条链击退是双手一记闷击带短余震、
+  过关庆祝是双手递升的四音琶音。
 - **场景**：盘面立在面前的桌上，像弹球台一样后仰 20°；标题页固定在房间里某个
   坐标，转头不会拖着它走。桌面窗口只是左眼的调试镜像。
 - 桌面有自己的坐标系：原点取毡面中心，**桌面高度＝原点到地面的距离（默认 0.50 m）**，倾角绕这个原点旋转（默认 20°）。右手摇杆上下调高度（0.15–1.65 m），左手摇杆上下调倾角（向上更平、向下更陡，0–35°）；桌子与盘面作为同一个刚体一起转。HUD 信息与结算文字独占一个「直立坐标系」——在世界里始终与地面垂直，不跟桌面倾角走。

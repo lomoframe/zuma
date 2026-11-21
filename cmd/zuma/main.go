@@ -46,9 +46,10 @@ type app struct {
 	board         mgl32.Mat4
 	boardInv      mgl32.Mat4
 	placedBoard   game.Board
-	tableY        float32 // table height: floor to the table origin, metres
-	winAdvanceAt  float64 // win screen: when the next level loads
-	tiltDeg       float32 // left stick: board tilt, degrees
+	tableY        float32       // table height: floor to the table origin, metres
+	winAdvanceAt  float64       // win screen: when the next level loads
+	haptics       []hapticPulse // rumbles waiting for their moment
+	tiltDeg       float32       // left stick: board tilt, degrees
 	lastAimT      float64
 	tableWorld    mgl32.Mat4
 	tilt          mgl32.Mat4
@@ -518,7 +519,7 @@ func main() {
 			w.SetShouldClose(true)
 		case glfw.KeyR:
 			a.g.Restart()
-			a.playEvents()
+			a.playEvents(glfw.GetTime())
 			log.Printf("restarted")
 		case glfw.KeySpace:
 			if a.r.SplashActive(glfw.GetTime()) {
@@ -617,7 +618,7 @@ func main() {
 		if !a.r.SplashActive(now) {
 			a.g.Update(float32(dt))
 			a.r.SetPath(a.g.Board, a.g.Path)
-			a.playEvents()
+			a.playEvents(now)
 		}
 		if a.g.Board != a.placedBoard {
 			a.placeBoard()
@@ -625,8 +626,9 @@ func main() {
 		if a.winAdvanceAt > 0 && now >= a.winAdvanceAt {
 			a.winAdvanceAt = 0
 			a.g.NextLevel()
-			a.playEvents()
+			a.playEvents(now)
 		}
+		a.runHaptics(now)
 
 		// XR path: the runtime owns the controller meshes, so they come from
 		// XR_EXT_render_model as glTF instead of SteamVR's render model API.
@@ -799,8 +801,9 @@ func (a *app) startXR() error {
 	return nil
 }
 
-// playEvents maps gameplay moments to the synthesised clips.
-func (a *app) playEvents() {
+// playEvents maps gameplay moments to the synthesised clips and to controller
+// rumble, so every audible beat has a matching one under the fingers.
+func (a *app) playEvents(now float64) {
 	for _, e := range a.g.TakeEvents() {
 		switch e.Kind {
 		case game.EventShoot:
@@ -826,6 +829,7 @@ func (a *app) playEvents() {
 		case game.EventLevel:
 			audio.Play(audio.Insert, 0.5)
 		}
+		a.queueHaptic(now, e.Kind, e.Value)
 	}
 }
 
@@ -1037,7 +1041,7 @@ func (a *app) aimOrigin(pose mgl32.Mat4, hand int, local mgl32.Vec3) mgl32.Vec3 
 	return o
 }
 
-func (a *app) fire() bool {
+func (a *app) fire(now float64) bool {
 	if !a.aimOK {
 		return false
 	}
@@ -1045,7 +1049,7 @@ func (a *app) fire() bool {
 	if ok && a.vrDebug {
 		log.Printf("shot o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", a.aimO[0], a.aimO[1], a.aimO[2], a.aimD[0], a.aimD[1], a.aimD[2])
 	}
-	a.playEvents()
+	a.playEvents(now)
 	return ok
 }
 
@@ -1401,9 +1405,9 @@ func (a *app) pressFire(now float64) {
 		}
 	case a.g.LoseReady():
 		a.g.Restart()
-		a.playEvents()
+		a.playEvents(now)
 	default:
-		a.fire()
+		a.fire(now)
 	}
 }
 

@@ -944,7 +944,10 @@ int xr_hand_pose(int hand, int aim, float *out12) {
     return 1;
 }
 
-int xr_haptic(int hand, float amplitude) {
+// xr_haptic buzzes one controller: amplitude is 0..1, frequency is in Hz (0 lets
+// the runtime pick) and seconds is how long the pulse lasts (the runtime clamps
+// it to its own limits).
+int xr_haptic(int hand, float amplitude, float frequency, double seconds) {
     if ((hand != 0 && hand != 1) || !g_actionsAttached) return 0;
     if (amplitude <= 0.0f) return 1;
     XrHapticVibration vibration;
@@ -952,7 +955,11 @@ int xr_haptic(int hand, float amplitude) {
     vibration.type = XR_TYPE_HAPTIC_VIBRATION;
     vibration.amplitude = amplitude > 1.0f ? 1.0f : amplitude;
     vibration.duration = XR_MIN_HAPTIC_DURATION;
-    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+    if (seconds > 0.0) {
+        XrDuration ns = (XrDuration)(seconds * 1e9);
+        if (ns > vibration.duration) vibration.duration = ns;
+    }
+    vibration.frequency = frequency > 0.0f ? frequency : XR_FREQUENCY_UNSPECIFIED;
     XrHapticActionInfo hi;
     memset(&hi, 0, sizeof hi);
     hi.type = XR_TYPE_HAPTIC_ACTION_INFO;

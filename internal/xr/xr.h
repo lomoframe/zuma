@@ -67,7 +67,8 @@ void xr_hand_stick(int hand, float *x, float *y);
 int xr_hand_buttons(int hand);
 /* aim 0 = grip pose, 1 = aim pose. Row-major 3x4 matrix. */
 int xr_hand_pose(int hand, int aim, float *out12);
-int xr_haptic(int hand, float amplitude);
+/* amplitude 0..1, frequency in Hz (0 = runtime default), seconds = pulse length. */
+int xr_haptic(int hand, float amplitude, float frequency, double seconds);
 
 // Interaction render model asset for one hand (0 = left, 1 = right). Returns a
 // malloc'd glTF buffer the caller frees with free(), or null with err filled.
