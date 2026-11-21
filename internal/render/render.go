@@ -241,19 +241,21 @@ type Renderer struct {
 
 	board *Mesh
 	// rim is the painted edge band, drawn with the colour of the bead in hand.
-	rim        *Mesh
-	table      *Mesh
-	path       *game.Path
-	pathKey    string
-	frog       *Mesh
-	ball       *Mesh
-	ring       *Mesh
-	beam       *Mesh
-	seam       *Mesh
-	hand       [2][]*Mesh // one entry per controller node (body, buttons, ...)
-	handTex    [2][]uint32
-	handHidden bool // uploads stay, drawing is skipped
-	handName   string
+	rim         *Mesh
+	table       *Mesh
+	path        *game.Path
+	pathKey     string
+	frog        *Mesh
+	ball        *Mesh
+	ring        *Mesh
+	beam        *Mesh
+	seam        *Mesh
+	hand        [2][]*Mesh // one entry per controller node (body, buttons, ...)
+	handTex     [2][]uint32
+	handHidden  bool    // uploads stay, drawing is skipped
+	handTrigger [2]int  // index of the trigger part, -1 when unknown
+	handGlow    float32 // 0..1 highlight on the trigger part
+	handName    string
 	// handOffset places a runtime-supplied controller mesh inside the grip
 	// pose; XR_EXT_render_model reports it as the model space.
 	handOffset    [2]mgl32.Mat4
@@ -559,6 +561,15 @@ func ballColor(i int) mgl32.Vec4 {
 
 // Draw renders one frame. vp is in world space; world maps board space into
 // the world (identity for the desktop camera).
+// MarkControllerTrigger records which uploaded part is the trigger button, so
+// it can be highlighted while the title page waits for a press.
+func (r *Renderer) MarkControllerTrigger(hand int) {
+	r.handTrigger[hand] = len(r.hand[hand]) - 1
+}
+
+// SetControllerTriggerGlow sets the 0..1 highlight applied to the trigger part.
+func (r *Renderer) SetControllerTriggerGlow(v float32) { r.handGlow = v }
+
 // SetControllerHidden keeps the uploaded controller meshes but stops drawing
 // them: used to check whether a visible shell comes from us or from elsewhere.
 func (r *Renderer) SetControllerHidden(hidden bool) { r.handHidden = hidden }
@@ -648,7 +659,14 @@ func (r *Renderer) drawController(hand int, pose mgl32.Mat4) {
 			} else {
 				r.meshProg.Float(r.uUseTex, 0)
 			}
+			if r.handTrigger[hand] == i && r.handGlow > 0 {
+				g := r.handGlow
+				r.meshProg.Vec4(r.uTint, 0.62+0.38*g, 0.66+0.24*g, 0.74-0.44*g, 1)
+			}
 			m.draw()
+			if r.handTrigger[hand] == i && r.handGlow > 0 {
+				r.meshProg.Vec4(r.uTint, 0.62, 0.66, 0.74, 1)
+			}
 		}
 		r.meshProg.Float(r.uUseTex, 0)
 	}

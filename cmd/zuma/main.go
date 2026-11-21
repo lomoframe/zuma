@@ -66,6 +66,10 @@ type app struct {
 	aimO           mgl32.Vec3
 	aimD           mgl32.Vec3
 	aimOK          bool
+	leftAimO       mgl32.Vec3
+	leftAimD       mgl32.Vec3
+	leftAimOK      bool
+	leftPrevTrig   bool
 	aimFlip        bool
 	aimFlipSet     bool
 	flipSum        float32
@@ -459,10 +463,13 @@ func main() {
 							continue
 						}
 						a.r.AddControllerNodeUV(hand, p, n, uv, ix, tex)
-						if hand == xr.Right {
+						{
 							for i := 0; i+2 < len(p); i += 3 {
 								a.ctrlVerts[hand] = append(a.ctrlVerts[hand], mgl32.Vec3{p[i], p[i+1], p[i+2]})
 							}
+						}
+						if node == "trigger" {
+							a.r.MarkControllerTrigger(hand)
 						}
 						log.Printf("controller model hand %d %s: %d verts, %d tris", hand, node, len(p)/3, len(ix)/3)
 					}
@@ -496,6 +503,13 @@ func main() {
 					}
 				}
 				a.modelPoseLogged = true
+			}
+			// While the title page is up, pulse the trigger buttons on both controllers:
+			// they are the "start" affordance.
+			if a.r.SplashActive(now) {
+				a.r.SetControllerTriggerGlow(float32(0.5 + 0.5*math.Sin(now*8)))
+			} else {
+				a.r.SetControllerTriggerGlow(0)
 			}
 			a.r.SetLeftHand(a.leftHandPose, a.leftHandPoseOK && a.ctrlModel && a.modelState == 2)
 			if xrReady {
@@ -799,6 +813,58 @@ func (a *app) renderEyesXR(displayTime, now float64) {
 var currentWindow *glfw.Window
 
 // fire launches the loaded bead along the current aim ray.
+// controllerTip finds the model vertex furthest along the aim direction for one
+// hand, in the runtime model space, so a shot leaves from the mesh itself.
+func (a *app) controllerTip(hand int, local mgl32.Vec3) (mgl32.Vec3, bool) {
+	if !a.xrOn || !a.ctrlModel || a.modelState != 2 || len(a.ctrlVerts[hand]) == 0 {
+		return mgl32.Vec3{}, false
+	}
+	mp, ok := xr.ModelPose(hand, a.xrTime)
+	if !ok {
+		return mgl32.Vec3{}, false
+	}
+	a.ctrlOffset[hand], a.ctrlOffsetOK[hand] = mp, true
+	if !a.ctrlTipOK[hand] {
+		wd := mp.Inv().Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
+		dm := mgl32.Vec3{wd[0], wd[1], wd[2]}
+		if dm.Len() < 1e-4 {
+			return mgl32.Vec3{}, false
+		}
+		dm = dm.Normalize()
+		best := float32(-1e9)
+		var tip mgl32.Vec3
+		for _, v := range a.ctrlVerts[hand] {
+			if k := v.Dot(dm); k > best {
+				best, tip = k, v
+			}
+		}
+		a.ctrlTip[hand], a.ctrlTipOK[hand] = tip, true
+		log.Printf("controller ray hand %d: tip=(%.3f,%.3f,%.3f) reach=%.3f", hand, tip[0], tip[1], tip[2], best)
+	}
+	return a.ctrlTip[hand], true
+}
+
+// aimOrigin is the muzzle: the model tip when the mesh is up, else the grip
+// origin.
+func (a *app) aimOrigin(pose mgl32.Mat4, hand int, local mgl32.Vec3) mgl32.Vec3 {
+	o := mgl32.Vec3{pose[12], pose[13], pose[14]}
+	if tip, ok := a.controllerTip(hand, local); ok {
+		w := pose.Mul4(a.ctrlOffset[hand]).Mul4x1(mgl32.Vec4{tip[0], tip[1], tip[2], 1})
+		o = mgl32.Vec3{w[0], w[1], w[2]}
+	}
+	return o
+}
+
+// fireFrom shoots the bead in hand along the given ray.
+func (a *app) fireFrom(o, d mgl32.Vec3) bool {
+	ok := a.g.Fire(o, d)
+	if ok && a.vrDebug {
+		log.Printf("shot o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f)", o[0], o[1], o[2], d[0], d[1], d[2])
+	}
+	a.playEvents()
+	return ok
+}
+
 func (a *app) fire() bool {
 	if !a.aimOK {
 		return false
@@ -981,43 +1047,15 @@ func (a *app) updateVRAim(now float64) {
 		}
 	}
 
+	th := mgl32.DegToRad(aimPitchDeg)
+	local := mgl32.Vec3{0, -float32(math.Sin(float64(th))), -float32(math.Cos(float64(th)))}
 	pose, poseOK := a.rightPose(dev)
 	if poseOK {
-		th := mgl32.DegToRad(aimPitchDeg)
-		local := mgl32.Vec3{0, -float32(math.Sin(float64(th))), -float32(math.Cos(float64(th)))}
 		w := pose.Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
 		d := mgl32.Vec3{w[0], w[1], w[2]}
 		if d.Len() > 1e-4 {
 			d = d.Normalize()
-			o := mgl32.Vec3{pose[12], pose[13], pose[14]}
-			// Fire from the controller mesh itself: the vertex furthest along
-			// the aim direction, mapped through the runtime model space.
-			if a.xrOn && a.ctrlModel && a.modelState == 2 {
-				if mp, mok := xr.ModelPose(xr.Right, a.xrTime); mok {
-					a.ctrlOffset[xr.Right], a.ctrlOffsetOK[xr.Right] = mp, true
-					if !a.ctrlTipOK[xr.Right] && len(a.ctrlVerts[xr.Right]) > 0 {
-						wd := mp.Inv().Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
-						dm := mgl32.Vec3{wd[0], wd[1], wd[2]}
-						if dm.Len() > 1e-4 {
-							dm = dm.Normalize()
-							best := float32(-1e9)
-							var tip mgl32.Vec3
-							for _, v := range a.ctrlVerts[xr.Right] {
-								if k := v.Dot(dm); k > best {
-									best, tip = k, v
-								}
-							}
-							a.ctrlTip[xr.Right], a.ctrlTipOK[xr.Right] = tip, true
-							log.Printf("controller ray tip: local=(%.3f,%.3f,%.3f) reach=%.3f", tip[0], tip[1], tip[2], best)
-						}
-					}
-				}
-			}
-			if a.ctrlTipOK[xr.Right] {
-				tip := a.ctrlTip[xr.Right]
-				w := pose.Mul4(a.ctrlOffset[xr.Right]).Mul4x1(mgl32.Vec4{tip[0], tip[1], tip[2], 1})
-				o = mgl32.Vec3{w[0], w[1], w[2]}
-			}
+			o := a.aimOrigin(pose, xr.Right, local)
 			a.lastDev = int(dev)
 			a.handPose = pose
 			a.handPoseOK = true
@@ -1037,6 +1075,27 @@ func (a *app) updateVRAim(now float64) {
 	if a.xrOn {
 		lh := xr.Hand(xr.Left)
 		a.leftHandPose, a.leftHandPoseOK = lh.Pose, lh.PoseOK
+		a.leftAimOK = false
+		if a.leftHandPoseOK {
+			lw := a.leftHandPose.Mul4x1(mgl32.Vec4{local[0], local[1], local[2], 0})
+			ld := mgl32.Vec3{lw[0], lw[1], lw[2]}
+			if ld.Len() > 1e-4 {
+				ld = ld.Normalize()
+				lo := a.aimOrigin(a.leftHandPose, xr.Left, local)
+				a.leftAimO, a.leftAimD = a.boardRay(lo, ld)
+				a.leftAimOK = true
+			}
+		}
+		// Left trigger fires too: it takes the bead in hand along the left ray.
+		lt := lh.Trigger > 0.5
+		if lt && !a.leftPrevTrig {
+			if a.r.SplashActive(now) {
+				a.r.SplashExit(now)
+			} else if a.leftAimOK {
+				a.fireFrom(a.leftAimO, a.leftAimD)
+			}
+		}
+		a.leftPrevTrig = lt
 	} else {
 		a.leftHandPoseOK = false
 	}
