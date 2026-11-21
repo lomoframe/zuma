@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"image/png"
 	"log"
 	"math"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"zuma/internal/audio"
 	"zuma/internal/game"
 	"zuma/internal/gl"
+	"zuma/internal/gltf"
 	"zuma/internal/render"
 	"zuma/internal/vr"
 	"zuma/internal/xr"
@@ -32,48 +35,53 @@ type app struct {
 	cam camera
 
 	// VR state.
-	vrOn          bool
-	wantXR        bool
-	xrOn          bool    // display goes through an OpenXR session
-	xrPassthrough bool    // clear the eye buffers transparent so the room shows
-	xrTime        float64 // this frame's predicted display time
-	eyes          [2]*gl.RenderTarget
-	board         mgl32.Mat4
-	boardInv      mgl32.Mat4
-	placedBoard   game.Board
-	tableY        float32 // table height: floor to the table origin, metres
-	winAdvanceAt  float64 // win screen: when the next level loads
-	tiltDeg       float32 // left stick: board tilt, degrees
-	lastAimT      float64
-	tableWorld    mgl32.Mat4
-	tilt          mgl32.Mat4
-	prevTrig      bool
-	vrAimOK       bool
-	vrAim         mgl32.Vec2
-	vrDebug       bool
-	vrcam         bool // documentation framing
-	vrFrames      int
-	lastVRLog     float64
-	showOrigin    bool
-	liftArmed     bool // right stick has been seen near neutral
-	tiltArmed     bool // left stick has been seen near neutral
-	vrRetryAt     float64
-	vrFailLog     float64
-	aimNote       string
-	aimO          mgl32.Vec3
-	aimD          mgl32.Vec3
-	aimOK         bool
-	aimFlip       bool
-	aimFlipSet    bool
-	flipSum       float32
-	flipN         int
-	aimSmooth     mgl32.Vec3
-	aimSmoothOK   bool
-	handPose      mgl32.Mat4
-	handPoseOK    bool
-	lastDev       int
-	modelState    int
-	msaa          int32
+	vrOn            bool
+	wantXR          bool
+	xrOn            bool    // display goes through an OpenXR session
+	xrPassthrough   bool    // clear the eye buffers transparent so the room shows
+	xrTime          float64 // this frame's predicted display time
+	eyes            [2]*gl.RenderTarget
+	board           mgl32.Mat4
+	boardInv        mgl32.Mat4
+	placedBoard     game.Board
+	tableY          float32 // table height: floor to the table origin, metres
+	winAdvanceAt    float64 // win screen: when the next level loads
+	tiltDeg         float32 // left stick: board tilt, degrees
+	lastAimT        float64
+	tableWorld      mgl32.Mat4
+	tilt            mgl32.Mat4
+	prevTrig        bool
+	vrAimOK         bool
+	vrAim           mgl32.Vec2
+	vrDebug         bool
+	vrcam           bool // documentation framing
+	vrFrames        int
+	lastVRLog       float64
+	showOrigin      bool
+	liftArmed       bool // right stick has been seen near neutral
+	tiltArmed       bool // left stick has been seen near neutral
+	vrRetryAt       float64
+	vrFailLog       float64
+	aimNote         string
+	aimO            mgl32.Vec3
+	aimD            mgl32.Vec3
+	aimOK           bool
+	aimFlip         bool
+	aimFlipSet      bool
+	flipSum         float32
+	flipN           int
+	aimSmooth       mgl32.Vec3
+	aimSmoothOK     bool
+	handPose        mgl32.Mat4
+	handPoseOK      bool
+	leftHandPose    mgl32.Mat4
+	leftHandPoseOK  bool
+	modelPoseLogged bool
+	lastDev         int
+	modelState      int
+	ctrlModel       bool
+	ctrlModelAt     float64 // next attempt for the XR render model fetch
+	msaa            int32
 }
 
 // aimPitchDeg is how far the shot direction is pitched from the controller's
@@ -121,7 +129,8 @@ func main() {
 	seed := flag.Int64("seed", 0, "random seed (0 = time-based)")
 	msaa := flag.Int("msaa", 4, "MSAA samples for the VR eye textures")
 	vrDebug := flag.Bool("vr-debug", false, "log head/controller/aim once per second")
-	ctrlModel := flag.Bool("controller-model", false, "draw SteamVR's controller mesh (may crash the zink driver on the frame)")
+	ctrlModelHide := flag.Bool("controller-model-hide", false, "load and upload the controller mesh but do not draw it")
+	ctrlModel := flag.Bool("controller-model", false, "load the controller mesh (XR: XR_EXT_render_model glTF; OpenVR: SteamVR render model)")
 	aimX := flag.Float64("aim-x", 0, "board-space aim point x used by -screenshot")
 	aimY := flag.Float64("aim-y", -0.5, "board-space aim point y used by -screenshot")
 	fire := flag.Bool("fire", true, "fire one ball while rendering a screenshot")
@@ -224,6 +233,8 @@ func main() {
 		a.cam.dist = 4.6 // tighter documentation framing
 	}
 	a.msaa = int32(*msaa)
+	a.ctrlModel = *ctrlModel
+	a.r.SetControllerHidden(*ctrlModelHide)
 	a.wantXR = *useXR
 	a.xrPassthrough = *passthrough
 	a.showOrigin = *showOrigin
@@ -373,11 +384,82 @@ func main() {
 			a.playEvents()
 		}
 
+		// XR path: the runtime owns the controller meshes, so they come from
+		// XR_EXT_render_model as glTF instead of SteamVR's render model API.
+		// Fetch and parse only for now; drawing comes next.
+		if a.xrOn && a.ctrlModel && a.modelState < 2 && xrReady && now >= a.ctrlModelAt {
+			a.ctrlModelAt = now + 5
+			loaded := true
+			for _, hand := range []int{xr.Left, xr.Right} {
+				data, err := xr.ModelGLTF(hand)
+				if err != nil {
+					log.Printf("controller model hand %d: %v", hand, err)
+					loaded = false
+					continue
+				}
+				doc, err := gltf.ParseGLB(data)
+				if err != nil {
+					log.Printf("controller model hand %d: %v", hand, err)
+					loaded = false
+					continue
+				}
+				log.Printf("controller model hand %d: %d bytes (%s), %d nodes %v, %d verts, %d tris, %d materials, %d images",
+					hand, len(data), doc.Asset.Generator, len(doc.Nodes), doc.NodeNames(),
+					doc.Verts(), doc.Tris(), len(doc.Materials), len(doc.Images))
+				// Upload every node of the controller (body, buttons, stick, trigger, ...)
+				// as its own mesh. Textures are the next step; this pass is
+				// flat-shaded.
+				{
+					a.r.ResetControllerModel(hand)
+					for _, node := range doc.NodeNames() {
+						p, n, uv, ii, img, nerr := doc.NodeMesh(node)
+						if nerr != nil {
+							log.Printf("controller model hand %d %s: %v", hand, node, nerr)
+							continue
+						}
+						var tex uint32
+						if img >= 0 {
+							if raw, ierr := doc.ImageBytes(img); ierr == nil {
+								if im, derr := png.Decode(bytes.NewReader(raw)); derr == nil {
+									tex = a.r.NewTexture(im)
+								} else {
+									log.Printf("controller model hand %d %s: png: %v", hand, node, derr)
+								}
+							}
+						}
+						ix := make([]uint16, len(ii))
+						bad := false
+						for k, v := range ii {
+							if v > 0xFFFF {
+								bad = true
+								break
+							}
+							ix[k] = uint16(v)
+						}
+						if bad {
+							log.Printf("controller model hand %d %s: needs 32-bit indices", hand, node)
+							continue
+						}
+						// status is a cover over the battery/hand-id display that the
+						// body already paints; drawing it on top hides that artwork
+						// behind its dark texels, so it is skipped.
+						if node == "status" {
+							continue
+						}
+						a.r.AddControllerNodeUV(hand, p, n, uv, ix, tex)
+						log.Printf("controller model hand %d %s: %d verts, %d tris", hand, node, len(p)/3, len(ix)/3)
+					}
+				}
+			}
+			if loaded {
+				a.modelState = 2
+			}
+		}
 		if a.vrOn && *ctrlModel && a.modelState == 0 && a.lastDev > 0 {
 			m, state := vr.LoadRenderModel(a.lastDev)
 			switch state {
 			case 1:
-				a.r.SetControllerModel(m.Pos, m.Nrm, m.Idx, m.Name)
+				a.r.SetControllerModel(xr.Right, m.Pos, m.Nrm, m.Idx, m.Name)
 				a.modelState = 2
 				log.Printf("controller model: %s (%d verts)", m.Name, len(m.Pos)/3)
 			case -1:
@@ -386,6 +468,19 @@ func main() {
 			}
 		}
 		if a.xrOn {
+			if a.ctrlModel && a.modelState == 2 {
+				for _, hand := range []int{xr.Left, xr.Right} {
+					if mp, ok := xr.ModelPose(hand, a.xrTime); ok {
+						a.r.SetControllerOffset(hand, mp)
+						if !a.modelPoseLogged {
+							log.Printf("controller model hand %d space: pos=(%.3f,%.3f,%.3f)",
+								hand, mp[12], mp[13], mp[14])
+						}
+					}
+				}
+				a.modelPoseLogged = true
+			}
+			a.r.SetLeftHand(a.leftHandPose, a.leftHandPoseOK && a.ctrlModel && a.modelState == 2)
 			if xrReady {
 				a.renderEyesXR(a.xrTime, now)
 			}
@@ -876,7 +971,7 @@ func (a *app) updateVRAim(now float64) {
 		d := mgl32.Vec3{w[0], w[1], w[2]}
 		if d.Len() > 1e-4 {
 			d = d.Normalize()
-			o := mgl32.Vec3{pose[12], pose[13], pose[14]}.Add(d.Mul(0.07))
+			o := mgl32.Vec3{pose[12], pose[13], pose[14]}
 			a.lastDev = int(dev)
 			a.handPose = pose
 			a.handPoseOK = true
@@ -891,6 +986,13 @@ func (a *app) updateVRAim(now float64) {
 	} else {
 		a.handPoseOK = false
 		a.aimNote = "no-device-pose"
+	}
+
+	if a.xrOn {
+		lh := xr.Hand(xr.Left)
+		a.leftHandPose, a.leftHandPoseOK = lh.Pose, lh.PoseOK
+	} else {
+		a.leftHandPoseOK = false
 	}
 
 	if st.Trigger && !a.prevTrig {

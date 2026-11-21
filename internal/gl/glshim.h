@@ -20,6 +20,7 @@ void govr_clear(unsigned int mask);
 void govr_enable(unsigned int cap);
 void govr_disable(unsigned int cap);
 void govr_depth_func(unsigned int f);
+void govr_polygon_offset(float factor, float units);
 void govr_cull_face(unsigned int m);
 void govr_front_face(unsigned int m);
 void govr_blend_func(unsigned int s, unsigned int d);

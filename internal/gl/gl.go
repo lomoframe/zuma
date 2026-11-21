@@ -53,6 +53,8 @@ const (
 	TextureWrapS     = uint32(C.GL_TEXTURE_WRAP_S)
 	TextureWrapT     = uint32(C.GL_TEXTURE_WRAP_T)
 
+	PolygonOffsetFill = uint32(0x8037) // GL_POLYGON_OFFSET_FILL
+
 	// Blend state and the dynamic-draw hint are passed straight through to GL.
 	Blend            = uint32(0x0BE2) // GL_BLEND
 	One              = uint32(0x0001) // GL_ONE
@@ -92,16 +94,20 @@ func Version() string { return C.GoString(C.govr_gl_version()) }
 func ClearColor(r, g, b, a float32) {
 	C.govr_clear_color(C.float(r), C.float(g), C.float(b), C.float(a))
 }
-func Clear(mask uint32)                { C.govr_clear(C.uint(mask)) }
-func Enable(cap uint32)                { C.govr_enable(C.uint(cap)) }
-func Disable(cap uint32)               { C.govr_disable(C.uint(cap)) }
-func DepthFunc(f uint32)               { C.govr_depth_func(C.uint(f)) }
-func CullFaceMode(m uint32)            { C.govr_cull_face(C.uint(m)) }
-func FrontFace(m uint32)               { C.govr_front_face(C.uint(m)) }
-func BlendFunc(src, dst uint32)        { C.govr_blend_func(C.uint(src), C.uint(dst)) }
-func PixelStore(pname uint32, v int32) { C.govr_pixel_store_i(C.uint(pname), C.int(v)) }
-func UseProgram(p uint32)              { C.govr_use_program(C.uint(p)) }
-func Flush()                           { C.govr_flush() }
+func Clear(mask uint32)  { C.govr_clear(C.uint(mask)) }
+func Enable(cap uint32)  { C.govr_enable(C.uint(cap)) }
+func Disable(cap uint32) { C.govr_disable(C.uint(cap)) }
+func DepthFunc(f uint32) { C.govr_depth_func(C.uint(f)) }
+
+// PolygonOffset biases depth per polygon; a negative offset pulls coplanar
+// decals towards the camera so they stop fighting with the surface under them.
+func PolygonOffset(factor, units float32) { C.govr_polygon_offset(C.float(factor), C.float(units)) }
+func CullFaceMode(m uint32)               { C.govr_cull_face(C.uint(m)) }
+func FrontFace(m uint32)                  { C.govr_front_face(C.uint(m)) }
+func BlendFunc(src, dst uint32)           { C.govr_blend_func(C.uint(src), C.uint(dst)) }
+func PixelStore(pname uint32, v int32)    { C.govr_pixel_store_i(C.uint(pname), C.int(v)) }
+func UseProgram(p uint32)                 { C.govr_use_program(C.uint(p)) }
+func Flush()                              { C.govr_flush() }
 
 // DepthMask controls whether depth writes are enabled.
 func DepthMask(on bool) {

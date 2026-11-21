@@ -14,6 +14,7 @@ type Vertex struct {
 	Pos mgl32.Vec3
 	Nrm mgl32.Vec3
 	Col mgl32.Vec4
+	UV  mgl32.Vec2
 }
 
 func rgba(r, g, b, a float32) mgl32.Vec4 { return mgl32.Vec4{r, g, b, a} }

@@ -265,20 +265,27 @@ func TestComboKnockbackIsAnimated(t *testing.T) {
 	}
 }
 
-func TestKnockbackStopsAtEntrance(t *testing.T) {
+func TestKnockbackRetreatsIntoTheHole(t *testing.T) {
 	g := New(1)
 	g.Queue = nil
 	g.Shots = nil
 	g.Balls = []Ball{{S: 0.05, Color: 0, ID: 1}}
 	g.KnockVel = -3
-	for i := 0; i < 120; i++ {
+	retreated := false
+	for i := 0; i < 240; i++ {
 		g.stepChain(1.0 / 60.0)
+		if g.Balls[0].S < 0 {
+			retreated = true
+		}
+		if g.Balls[0].S < -knockRetreat-1e-4 {
+			t.Fatalf("chain retreated past the hole: %v", g.Balls[0].S)
+		}
 	}
-	if g.Balls[0].S < 0 {
-		t.Fatalf("chain pushed past the entrance: %v", g.Balls[0].S)
+	if !retreated {
+		t.Fatalf("combo knock must push the tail into the hole, tail stayed at %v", g.Balls[0].S)
 	}
 	if g.KnockVel != 0 {
-		t.Fatalf("recoil should stop at the wall, got %v", g.KnockVel)
+		t.Fatalf("recoil never settled: %v", g.KnockVel)
 	}
 }
 

@@ -132,6 +132,31 @@ func Acquire(eye int) (uint32, bool) {
 	return uint32(tex), true
 }
 
+// ModelGLTF fetches the runtime's controller mesh for one hand (0 = left, 1 =
+// right) as glTF bytes. It needs the session running and the pose actions
+// attached: the runtime only exposes models for profiles the app has bound.
+func ModelGLTF(hand int) ([]byte, error) {
+	buf := C.malloc(512)
+	defer C.free(buf)
+	var n C.int
+	p := C.xr_model_gltf(C.int(hand), &n, (*C.char)(buf), 512)
+	if p == nil {
+		return nil, fmt.Errorf("%s", C.GoString((*C.char)(buf)))
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoBytes(unsafe.Pointer(p), n), nil
+}
+
+// ModelPose is the render model space of one hand inside that hand's grip
+// space. Multiply it by the grip pose to place the mesh the runtime gave us.
+func ModelPose(hand int, t float64) (mgl32.Mat4, bool) {
+	var raw [12]float32
+	if C.xr_model_pose(C.int(hand), C.double(t), (*C.float)(unsafe.Pointer(&raw[0]))) != 1 {
+		return mgl32.Ident4(), false
+	}
+	return mat34(raw), true
+}
+
 // Hands, as the runtime names the subaction paths.
 const (
 	Left  = 0

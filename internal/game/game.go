@@ -521,12 +521,14 @@ func (g *Game) stepChain(dt float32) {
 		v = 0
 	}
 
-	// Knockback: the whole chain shares one recoil velocity. The entrance
-	// acts like a wall, so the tail cannot be pushed past s=0.
+	// Knockback: the whole chain shares one recoil velocity. The tail may be
+	// pushed back into the entrance hole (its beads are then inside the hole and
+	// are not drawn), so a combo that lands while the chain is still being
+	// released keeps shoving instead of dying at s=0.
 	if g.KnockVel != 0 && g.State == StatePlaying {
 		shift := g.KnockVel * dt
 		if shift < 0 {
-			if minShift := -g.Balls[len(g.Balls)-1].S; shift < minShift {
+			if minShift := -knockRetreat - g.Balls[len(g.Balls)-1].S; shift < minShift {
 				shift = minShift
 				g.KnockVel = 0
 			}
@@ -814,6 +816,11 @@ func (g *Game) matchAt(idx int) {
 // knockMax bounds the chain recoil. The impulse grows with every extra pop, so
 // it needs a ceiling that keeps the beads inside the groove.
 const knockMax float32 = 9
+
+// knockRetreat is how far past the entrance the chain's tail may be pushed: a
+// few beads vanish into the hole, which is what a combo landing while the chain
+// is still coming out should look like.
+const knockRetreat float32 = 0.9
 
 // comboImpulse is the recoil (m/s, away from the hole) for c pops caused by one
 // shot: nothing on the first pop, then a strictly stronger push for every level.

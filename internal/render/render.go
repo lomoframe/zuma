@@ -31,18 +31,21 @@ const meshVS = `#version 410 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec4 aCol;
+layout(location=3) in vec2 aUV;
 uniform mat4 uVP;
 uniform mat4 uModel;
 out vec3 vNrm;
 out vec3 vWorld;
 out vec4 vCol;
 out vec3 vLocal;
+out vec2 vUV;
 void main() {
         vLocal = aPos;
         vec4 w = uModel * vec4(aPos, 1.0);
         vWorld = w.xyz;
         vNrm = mat3(uModel) * aNrm;
         vCol = aCol;
+        vUV = aUV;
         gl_Position = uVP * w;
 }`
 
@@ -51,6 +54,9 @@ in vec3 vNrm;
 in vec3 vWorld;
 in vec4 vCol;
 in vec3 vLocal;
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform float uUseTex;
 uniform mat3 uBallRot;
 uniform float uBall;
 uniform vec4 uTint;
@@ -68,7 +74,9 @@ float hash13(vec3 p) {
 void main() {
         vec3 n = normalize(vNrm);
         vec3 L = normalize(vec3(0.38, 0.88, 0.30));
-        vec3 base = vCol.rgb * uTint.rgb;
+        vec4 texel = texture(uTex, vUV);
+        vec3 base = vCol.rgb * uTint.rgb * mix(vec3(1.0), texel.rgb, uUseTex);
+        float alpha = mix(vCol.a, vCol.a * texel.a, uUseTex);
         if (uBall > 0.5) {
                 // Fine speckle noise only: no stripes. It rotates with the
                 // ball's real rolling, so the grain visibly flows.
@@ -79,7 +87,7 @@ void main() {
                 base *= 0.84 + 0.13 * n1 + 0.07 * n2 + 0.04 * n3;
         }
         if (uUnlit > 0.5) {
-                frag = vec4(base, vCol.a * uTint.a);
+                frag = vec4(base, alpha * uTint.a);
                 return;
         }
         float d = max(dot(n, L), 0.0);
@@ -90,7 +98,7 @@ void main() {
         col += vec3(1.0, 0.97, 0.92) * pow(max(dot(n, H), 0.0), 64.0) * uGloss;
         float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0);
         col += base * rim * 0.20;
-        frag = vec4(col, vCol.a * uTint.a);
+        frag = vec4(col, alpha * uTint.a);
 }`
 
 const textVS = `#version 410 core
@@ -131,6 +139,9 @@ func upload(b *Builder) *Mesh {
 		for i := 0; i < 4; i++ {
 			buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(v.Col[i]))
 		}
+		for i := 0; i < 2; i++ {
+			buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(v.UV[i]))
+		}
 	}
 	var ibuf []byte
 	for _, i := range b.idx {
@@ -143,13 +154,15 @@ func upload(b *Builder) *Mesh {
 	gl.BufferData(gl.ArrayBuffer, buf, gl.StaticDraw)
 	gl.BindBuffer(gl.ElementArrayBuffer, m.ebo)
 	gl.BufferData(gl.ElementArrayBuffer, ibuf, gl.StaticDraw)
-	const stride = int32(10 * 4)
+	const stride = int32(12 * 4)
 	gl.EnableAttrib(0)
 	gl.AttribPtr(0, 3, gl.Float, false, stride, 0)
 	gl.EnableAttrib(1)
 	gl.AttribPtr(1, 3, gl.Float, false, stride, 12)
 	gl.EnableAttrib(2)
 	gl.AttribPtr(2, 4, gl.Float, false, stride, 24)
+	gl.EnableAttrib(3)
+	gl.AttribPtr(3, 2, gl.Float, false, stride, 40)
 	gl.BindVAO(0)
 	return m
 }
@@ -224,20 +237,30 @@ type Renderer struct {
 	uVP, uModel, uTint, uCam, uGloss, uUnlit, uBall int32
 	uBallRot                                        mat3Loc
 	uMVP, uTex, uColor                              int32
+	uMeshTex, uUseTex                               int32
 
 	board *Mesh
 	// rim is the painted edge band, drawn with the colour of the bead in hand.
-	rim      *Mesh
-	table    *Mesh
-	path     *game.Path
-	pathKey  string
-	frog     *Mesh
-	ball     *Mesh
-	ring     *Mesh
-	beam     *Mesh
-	seam     *Mesh
-	hand     *Mesh
-	handName string
+	rim        *Mesh
+	table      *Mesh
+	path       *game.Path
+	pathKey    string
+	frog       *Mesh
+	ball       *Mesh
+	ring       *Mesh
+	beam       *Mesh
+	seam       *Mesh
+	hand       [2][]*Mesh // one entry per controller node (body, buttons, ...)
+	handTex    [2][]uint32
+	handHidden bool // uploads stay, drawing is skipped
+	handName   string
+	// handOffset places a runtime-supplied controller mesh inside the grip
+	// pose; XR_EXT_render_model reports it as the model space.
+	handOffset    [2]mgl32.Mat4
+	handOffsetSet [2]bool
+	// left hand pose, set once per frame by the app
+	leftPose mgl32.Mat4
+	leftOK   bool
 	quad     *textQuad
 
 	// Loading screen.
@@ -346,11 +369,15 @@ func New() (*Renderer, error) {
 		uUnlit:   mp.Loc("uUnlit"),
 		uBall:    mp.Loc("uBall"),
 		uBallRot: mat3Loc(mp.Loc("uBallRot")),
+		uMeshTex: mp.Loc("uTex"),
+		uUseTex:  mp.Loc("uUseTex"),
 		uMVP:     tp.Loc("uMVP"),
 		uTex:     tp.Loc("uTex"),
 		uColor:   tp.Loc("uColor"),
 		texts:    map[string]*textTex{},
 	}
+	mp.Bind()
+	mp.Int(r.uMeshTex, 0)
 	r.SetPath(game.CircleBoard(3.10), game.NewPathForBoard())
 	r.frog = upload(buildFrog())
 	r.ball = upload(buildBall())
@@ -532,37 +559,101 @@ func ballColor(i int) mgl32.Vec4 {
 
 // Draw renders one frame. vp is in world space; world maps board space into
 // the world (identity for the desktop camera).
-// SetControllerModel uploads SteamVR's own controller mesh, in metres in the
-// device's local space.
-func (r *Renderer) SetControllerModel(pos, nrm []float32, idx []uint16, name string) {
+// SetControllerHidden keeps the uploaded controller meshes but stops drawing
+// them: used to check whether a visible shell comes from us or from elsewhere.
+func (r *Renderer) SetControllerHidden(hidden bool) { r.handHidden = hidden }
+
+// ResetControllerModel drops the parts uploaded for one hand.
+func (r *Renderer) ResetControllerModel(hand int) {
+	r.hand[hand] = nil
+	r.handTex[hand] = nil
+}
+
+// AddControllerNode appends one node of a controller (body, trigger, a button,
+// ...) to a hand's mesh list, in metres in the model's local space. tex is 0 for
+// an untextured node.
+func (r *Renderer) AddControllerNode(hand int, pos, nrm []float32, idx []uint16, tex uint32) {
+	r.AddControllerNodeUV(hand, pos, nrm, nil, idx, tex)
+}
+
+// AddControllerNodeUV is AddControllerNode with texture coordinates.
+func (r *Renderer) AddControllerNodeUV(hand int, pos, nrm, uvs []float32, idx []uint16, tex uint32) {
 	n := len(pos) / 3
 	if n == 0 || len(nrm) < n*3 || len(idx) == 0 {
 		return
 	}
 	b := &Builder{}
 	for i := 0; i < n; i++ {
+		uv := mgl32.Vec2{}
+		if len(uvs) >= (i+1)*2 {
+			uv = mgl32.Vec2{uvs[i*2], uvs[i*2+1]}
+		}
 		b.verts = append(b.verts, Vertex{
 			Pos: mgl32.Vec3{pos[i*3], pos[i*3+1], pos[i*3+2]},
 			Nrm: mgl32.Vec3{nrm[i*3], nrm[i*3+1], nrm[i*3+2]},
 			Col: rgba(1, 1, 1, 1),
+			UV:  uv,
 		})
 	}
 	for _, i := range idx {
 		b.idx = append(b.idx, uint32(i))
 	}
-	r.hand = upload(b)
+	r.hand[hand] = append(r.hand[hand], upload(b))
+	r.handTex[hand] = append(r.handTex[hand], tex)
+}
+
+// SetControllerModel replaces a hand's mesh list with a single mesh. Used by the
+// OpenVR path, which hands over one combined model.
+func (r *Renderer) SetControllerModel(hand int, pos, nrm []float32, idx []uint16, name string) {
+	r.hand[hand] = nil
+	r.AddControllerNode(hand, pos, nrm, idx, 0)
 	r.handName = name
 }
 
-// drawController draws SteamVR's controller model at the device pose plus the
-// device axes, so the physical pad can be compared with what the runtime says.
-func (r *Renderer) drawController(pose mgl32.Mat4) {
-	if r.hand != nil {
+// SetControllerOffset places one hand's uploaded mesh inside its grip pose. The
+// runtime reports this offset as the XR_EXT_render_model model space, so the
+// drawing code never has to guess it.
+func (r *Renderer) SetControllerOffset(hand int, offset mgl32.Mat4) {
+	r.handOffset[hand] = offset
+	r.handOffsetSet[hand] = true
+}
+
+// SetLeftHand gives Draw the left hand pose for the current frame.
+func (r *Renderer) SetLeftHand(pose mgl32.Mat4, ok bool) {
+	r.leftPose = pose
+	r.leftOK = ok
+}
+
+// drawController draws one hand's controller model at the device pose. The
+// right hand also carries the device axes, so the physical pad can be compared
+// with what the runtime says.
+func (r *Renderer) drawController(hand int, pose mgl32.Mat4) {
+	if r.handOffsetSet[hand] {
+		pose = pose.Mul4(r.handOffset[hand])
+	}
+	if len(r.hand[hand]) > 0 && !r.handHidden {
 		r.meshProg.Mat4(r.uModel, pose)
 		r.meshProg.Vec4(r.uTint, 0.62, 0.66, 0.74, 1)
 		r.meshProg.Float(r.uGloss, 0.30)
 		r.meshProg.Float(r.uUnlit, 0)
-		r.hand.draw()
+		for i, m := range r.hand[hand] {
+			tex := uint32(0)
+			if i < len(r.handTex[hand]) {
+				tex = r.handTex[hand][i]
+			}
+			if tex != 0 {
+				gl.ActiveTexture(gl.Texture0)
+				gl.BindTexture(gl.Texture2D, tex)
+				r.meshProg.Float(r.uUseTex, 1)
+			} else {
+				r.meshProg.Float(r.uUseTex, 0)
+			}
+			m.draw()
+		}
+		r.meshProg.Float(r.uUseTex, 0)
+	}
+	if hand != 1 {
+		return
 	}
 	o := mgl32.Vec3{pose[12], pose[13], pose[14]}
 	axes := [3]mgl32.Vec3{
@@ -584,6 +675,7 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g 
 	r.meshProg.Bind()
 	r.meshProg.Mat4(r.uVP, vp)
 	r.meshProg.Vec3(r.uCam, cam[0], cam[1], cam[2])
+	r.meshProg.Float(r.uUseTex, 0)
 	gl.Enable(gl.DepthTest)
 	gl.Enable(gl.CullFace)
 	gl.CullFaceMode(gl.Back)
@@ -608,6 +700,9 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g 
 	// Chain beads.
 	r.meshProg.Float(r.uGloss, 1.10)
 	for i, bd := range g.Balls {
+		if bd.S < 0 {
+			continue // pushed back into the entrance hole
+		}
 		s := bd.S
 		if g.PushFrom() >= 0 && i >= g.PushFrom() {
 			s -= g.Push()
@@ -659,8 +754,11 @@ func (r *Renderer) Draw(vp mgl32.Mat4, cam mgl32.Vec3, world, hud mgl32.Mat4, g 
 		r.meshProg.Float(r.uBall, 0)
 	}
 
+	if r.leftOK {
+		r.drawController(0, r.leftPose)
+	}
 	if handOK {
-		r.drawController(hand)
+		r.drawController(1, hand)
 	}
 	// The player is the launcher: a beam leaves the controller and a bead
 	// waits at its tip.
@@ -720,6 +818,9 @@ func (r *Renderer) aimTarget(g *game.Game, o, d mgl32.Vec3) (mgl32.Vec3, seamMar
 	bestIdx := -1
 	var hit mgl32.Vec3
 	for i, b := range g.Balls {
+		if b.S < 0 {
+			continue // inside the hole: not a target
+		}
 		q := g.Path.PointAt(b.S)
 		c := mgl32.Vec3{q.X(), game.BallR, q.Y()}
 		oc := o.Sub(c)
@@ -1049,6 +1150,40 @@ func (r *Renderer) uploadText(w, h int, mask []byte) *textTex {
 	gl.TexParamI(gl.Texture2D, gl.TextureWrapS, int32(gl.ClampToEdge))
 	gl.TexParamI(gl.Texture2D, gl.TextureWrapT, int32(gl.ClampToEdge))
 	return &textTex{tex: tex, w: w, h: h}
+}
+
+// NewTexture uploads an image as a RGBA8 texture and returns its GL name.
+func (r *Renderer) NewTexture(img image.Image) uint32 {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	pix := make([]byte, w*h*4)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			rr, gg, bb, aa := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			i := (y*w + x) * 4
+			pix[i+0] = byte(rr >> 8)
+			pix[i+1] = byte(gg >> 8)
+			pix[i+2] = byte(bb >> 8)
+			pix[i+3] = byte(aa >> 8)
+		}
+	}
+	tex := gl.GenTexture()
+	gl.BindTexture(gl.Texture2D, tex)
+	gl.PixelStore(gl.UnpackAlignment, 1)
+	gl.TexImage2D(gl.Texture2D, int32(gl.RGBA8), int32(w), int32(h), gl.RGBA, gl.UnsignedByte,
+		unsafe.Pointer(&pix[0]))
+	// Controller textures are 2k and are seen at a small size: without a mip
+	// chain the minified detail shimmers and reads as patches that do not match
+	// their neighbours.
+	gl.GenerateMipmap(gl.Texture2D)
+	gl.TexParamI(gl.Texture2D, gl.TextureMinFilter, int32(gl.LinearMipmap))
+	gl.TexParamI(gl.Texture2D, gl.TextureMagFilter, int32(gl.Linear))
+	gl.TexParamI(gl.Texture2D, gl.TextureWrapS, int32(gl.ClampToEdge))
+	gl.TexParamI(gl.Texture2D, gl.TextureWrapT, int32(gl.ClampToEdge))
+	return tex
 }
 
 // ReadPixelsRGBA grabs the framebuffer into a PNG, flipped upright.

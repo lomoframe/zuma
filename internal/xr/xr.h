@@ -63,6 +63,13 @@ int xr_hand_buttons(int hand);
 int xr_hand_pose(int hand, int aim, float *out12);
 int xr_haptic(int hand, float amplitude);
 
+// Interaction render model asset for one hand (0 = left, 1 = right). Returns a
+// malloc'd glTF buffer the caller frees with free(), or null with err filled.
+unsigned char *xr_model_gltf(int hand, int *out_len, char *err, int errlen);
+/* Pose of one hand's render model space inside that hand's grip space. */
+int xr_model_pose(int hand, double display_time, float *out12);
+
+
 #ifdef __cplusplus
 }
 #endif

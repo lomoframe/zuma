@@ -26,6 +26,7 @@ void govr_clear(unsigned int mask) { glClear(mask); }
 void govr_enable(unsigned int cap) { glEnable(cap); }
 void govr_disable(unsigned int cap) { glDisable(cap); }
 void govr_depth_func(unsigned int f) { glDepthFunc(f); }
+void govr_polygon_offset(float factor, float units) { glPolygonOffset(factor, units); }
 void govr_cull_face(unsigned int m) { glCullFace(m); }
 void govr_front_face(unsigned int m) { glFrontFace(m); }
 void govr_blend_func(unsigned int s, unsigned int d) { glBlendFunc(s, d); }

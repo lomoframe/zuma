@@ -11,6 +11,7 @@
 #include <openxr/openxr_platform.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <vector>
 
@@ -19,6 +20,11 @@
 namespace {
 
 const char *kGLXExtension = "XR_KHR_opengl_enable";
+// Steam Frame Controller's own interaction profile. The headers this project
+// builds against predate it, so the name stays a literal; the runtime reports it
+// through xrEnumerateInstanceExtensionProperties.
+const char *kFrameControllerExtension = "XR_VALVE_frame_controller_interaction";
+const char *kFrameControllerProfile = "/interaction_profiles/valve/frame_controller_valve";
 const int kMaxSwapchainImages = 8;
 
 XrInstance g_instance = XR_NULL_HANDLE;
@@ -121,10 +127,25 @@ XrResult createInstance(Display *dpy, XrInstance *out) {
     // The loader headers are newer than the runtime: 1.1 is rejected with
     // XR_ERROR_API_VERSION_UNSUPPORTED, 1.0 is what SteamVR implements.
     ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
-    // Only the graphics binding: nothing else is enabled, so the runtime cannot
-    // apply any extra space adjustment on our behalf.
-    const char *exts[1] = {kGLXExtension};
-    ci.enabledExtensionCount = 1;
+    // Graphics binding, the Frame Controller profile, and the render-model
+    // extensions that hand us the controller meshes. XR_EXT_render_model needs
+    // XR_EXT_uuid enabled alongside it or the loader rejects the instance with
+    // XR_ERROR_VALIDATION_FAILURE.
+    const char *exts[5];
+    int extCount = 0;
+    exts[extCount++] = kGLXExtension;
+    if (hasExtension(kFrameControllerExtension)) {
+        exts[extCount++] = kFrameControllerExtension;
+        fprintf(stderr, "xr: frame controller interaction profile enabled\n");
+    }
+    if (hasExtension("XR_EXT_uuid") && hasExtension("XR_EXT_render_model") &&
+        hasExtension("XR_EXT_interaction_render_model")) {
+        exts[extCount++] = "XR_EXT_uuid";
+        exts[extCount++] = "XR_EXT_render_model";
+        exts[extCount++] = "XR_EXT_interaction_render_model";
+        fprintf(stderr, "xr: controller render models enabled\n");
+    }
+    ci.enabledExtensionCount = static_cast<uint32_t>(extCount);
     ci.enabledExtensionNames = exts;
     return xrCreateInstance(&ci, out);
 }
@@ -277,13 +298,15 @@ XrAction makeAction(XrActionSet set, XrActionType type, const char *name) {
 void suggestBindings() {
     struct Profile {
         const char *path;
-        bool faceXY;  // profile has X/Y (touch) as well as A/B
-        bool simple;  // KHR simple controller: select + poses only
+        bool faceXY;       // profile has X/Y (touch) as well as A/B
+        bool simple;       // KHR simple controller: select + poses only
+        bool faceRightOnly; // frame controller: A/B/X/Y live on the right hand only
     };
     static const Profile profiles[] = {
-        {"/interaction_profiles/oculus/touch_controller", true, false},
-        {"/interaction_profiles/valve/index_controller", false, false},
-        {"/interaction_profiles/khr/simple_controller", false, true},
+        {kFrameControllerProfile, true, false, true},
+        {"/interaction_profiles/oculus/touch_controller", true, false, false},
+        {"/interaction_profiles/valve/index_controller", false, false, false},
+        {"/interaction_profiles/khr/simple_controller", false, true, false},
     };
 
     for (const Profile &profile : profiles) {
@@ -312,11 +335,13 @@ void suggestBindings() {
                 add(g_actions.triggerClick, "trigger/click");
                 add(g_actions.stick, "thumbstick");
                 add(g_actions.stickClick, "thumbstick/click");
-                add(g_actions.a, "a/click");
-                add(g_actions.b, "b/click");
-                if (profile.faceXY) {
-                    add(g_actions.x, "x/click");
-                    add(g_actions.y, "y/click");
+                if (!profile.faceRightOnly || hand == 1) {
+                    add(g_actions.a, "a/click");
+                    add(g_actions.b, "b/click");
+                    if (profile.faceXY) {
+                        add(g_actions.x, "x/click");
+                        add(g_actions.y, "y/click");
+                    }
                 }
             }
             add(g_actions.gripPose, "grip/pose");
@@ -624,6 +649,23 @@ int xr_poll(void) {
                 default:
                     break;
             }
+        } else if (ev.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            // Which profile the runtime actually bound: the frame controller one
+            // means the native A/B/X/Y paths are live instead of the index
+            // compatibility layer.
+            for (int hand = 0; hand < 2; hand++) {
+                if (g_handPath[hand] == XR_NULL_PATH) continue;
+                XrInteractionProfileState st;
+                memset(&st, 0, sizeof st);
+                st.type = XR_TYPE_INTERACTION_PROFILE_STATE;
+                if (XR_FAILED(xrGetCurrentInteractionProfile(g_session, g_handPath[hand], &st))) continue;
+                if (st.interactionProfile == XR_NULL_PATH) continue;
+                char path[XR_MAX_PATH_LENGTH] = {0};
+                uint32_t len = 0;
+                if (XR_SUCCEEDED(
+                        xrPathToString(g_instance, st.interactionProfile, sizeof path, &len, path)))
+                    fprintf(stderr, "xr: %s profile %s\n", hand == 1 ? "right" : "left", path);
+            }
         } else if (ev.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             g_quit = true;
         }
@@ -873,6 +915,214 @@ int xr_haptic(int hand, float amplitude) {
                                              reinterpret_cast<const XrHapticBaseHeader *>(&vibration)))
                ? 1
                : 0;
+}
+
+
+// --- interaction render models (XR_EXT_render_model) ----------------------
+
+static XrRenderModelEXT g_model[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+static XrSpace g_modelSpace[2] = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+//
+// The runtime owns the controller meshes: an app can ask for the glTF asset of
+// the model attached to one hand. That replaces SteamVR's IVRRenderModels
+// without adding an OpenVR client to the process.
+
+static PFN_xrEnumerateInteractionRenderModelIdsEXT g_pModelIds = nullptr;
+static PFN_xrEnumerateRenderModelSubactionPathsEXT g_pModelPaths = nullptr;
+static PFN_xrCreateRenderModelEXT g_pCreateModel = nullptr;
+static PFN_xrDestroyRenderModelEXT g_pDestroyModel = nullptr;
+static PFN_xrGetRenderModelPropertiesEXT g_pModelProps = nullptr;
+static PFN_xrCreateRenderModelAssetEXT g_pCreateAsset = nullptr;
+static PFN_xrDestroyRenderModelAssetEXT g_pDestroyAsset = nullptr;
+static PFN_xrGetRenderModelAssetDataEXT g_pModelAssetData = nullptr;
+
+static PFN_xrVoidFunction xrGetInstanceProcAddrWrapper(const char *name) {
+    PFN_xrVoidFunction fn = nullptr;
+    if (XR_FAILED(xrGetInstanceProcAddr(g_instance, name, &fn))) return nullptr;
+    return fn;
+}
+
+static bool resolveModelProcs() {
+    if (g_pModelIds != nullptr) return true;
+    auto get = [](const char *name) -> PFN_xrVoidFunction {
+        PFN_xrVoidFunction fn = nullptr;
+        if (XR_FAILED(xrGetInstanceProcAddr(g_instance, name, &fn))) return nullptr;
+        return fn;
+    };
+    g_pModelIds = reinterpret_cast<PFN_xrEnumerateInteractionRenderModelIdsEXT>(
+        get("xrEnumerateInteractionRenderModelIdsEXT"));
+    g_pModelPaths = reinterpret_cast<PFN_xrEnumerateRenderModelSubactionPathsEXT>(
+        get("xrEnumerateRenderModelSubactionPathsEXT"));
+    g_pCreateModel =
+        reinterpret_cast<PFN_xrCreateRenderModelEXT>(get("xrCreateRenderModelEXT"));
+    g_pDestroyModel =
+        reinterpret_cast<PFN_xrDestroyRenderModelEXT>(get("xrDestroyRenderModelEXT"));
+    g_pModelProps =
+        reinterpret_cast<PFN_xrGetRenderModelPropertiesEXT>(get("xrGetRenderModelPropertiesEXT"));
+    g_pCreateAsset =
+        reinterpret_cast<PFN_xrCreateRenderModelAssetEXT>(get("xrCreateRenderModelAssetEXT"));
+    g_pDestroyAsset =
+        reinterpret_cast<PFN_xrDestroyRenderModelAssetEXT>(get("xrDestroyRenderModelAssetEXT"));
+    g_pModelAssetData =
+        reinterpret_cast<PFN_xrGetRenderModelAssetDataEXT>(get("xrGetRenderModelAssetDataEXT"));
+    return g_pModelIds && g_pModelPaths && g_pCreateModel && g_pDestroyModel && g_pModelProps &&
+           g_pCreateAsset && g_pDestroyAsset && g_pModelAssetData;
+}
+
+// True when this model belongs to the requested hand. Models carry no hand bit:
+// the subaction paths they answer to do it.
+static bool modelIsForHand(XrRenderModelEXT model, const char *want) {
+    XrInteractionRenderModelSubactionPathInfoEXT info;
+    memset(&info, 0, sizeof info);
+    info.type = XR_TYPE_INTERACTION_RENDER_MODEL_SUBACTION_PATH_INFO_EXT;
+    uint32_t count = 0;
+    if (XR_FAILED(g_pModelPaths(model, &info, 0, &count, nullptr)) || count == 0) return false;
+    std::vector<XrPath> paths(count);
+    if (XR_FAILED(g_pModelPaths(model, &info, count, &count, paths.data()))) return false;
+    for (uint32_t i = 0; i < count; i++) {
+        char buf[XR_MAX_PATH_LENGTH] = {0};
+        uint32_t len = 0;
+        if (XR_FAILED(xrPathToString(g_instance, paths[i], sizeof buf, &len, buf))) continue;
+        if (strcmp(buf, want) == 0) return true;
+    }
+    return false;
+}
+
+// xr_model_pose reports the render model space of one hand inside that hand's
+// grip space: the mesh vertices are authored in this frame.
+int xr_model_pose(int hand, double display_time, float *out12) {
+    if (hand < 0 || hand > 1 || out12 == nullptr) return 0;
+    if (g_modelSpace[hand] == XR_NULL_HANDLE || g_gripSpace[hand] == XR_NULL_HANDLE) return 0;
+    XrSpaceLocation loc;
+    memset(&loc, 0, sizeof loc);
+    loc.type = XR_TYPE_SPACE_LOCATION;
+    XrResult r = xrLocateSpace(g_modelSpace[hand], g_gripSpace[hand],
+                              (XrTime)(display_time * 1e9), &loc);
+    if (XR_FAILED(r)) return 0;
+    if ((loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0 ||
+        (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0)
+        return 0;
+    poseToMat34(loc.pose, out12);
+    return 1;
+}
+
+// xr_model_gltf copies the glTF asset of one hand's controller into a malloc'd
+// buffer the caller frees with free(). Returns null and fills err on failure.
+unsigned char *xr_model_gltf(int hand, int *out_len, char *err, int errlen) {
+    if (out_len) *out_len = 0;
+    if (g_session == XR_NULL_HANDLE) {
+        snprintf(err, errlen, "no session");
+        return nullptr;
+    }
+    if (!resolveModelProcs()) {
+        snprintf(err, errlen, "runtime lacks XR_EXT_render_model");
+        return nullptr;
+    }
+
+    XrInteractionRenderModelIdsEnumerateInfoEXT info;
+    memset(&info, 0, sizeof info);
+    info.type = XR_TYPE_INTERACTION_RENDER_MODEL_IDS_ENUMERATE_INFO_EXT;
+    uint32_t count = 0;
+    if (XR_FAILED(g_pModelIds(g_session, &info, 0, &count, nullptr)) || count == 0) {
+        snprintf(err, errlen, "no interaction render models (bind a pose action first)");
+        return nullptr;
+    }
+    std::vector<XrRenderModelIdEXT> ids(count);
+    if (XR_FAILED(g_pModelIds(g_session, &info, count, &count, ids.data()))) {
+        snprintf(err, errlen, "render model enumeration failed");
+        return nullptr;
+    }
+
+    const char *want = hand == 1 ? "/user/hand/right" : "/user/hand/left";
+    for (uint32_t i = 0; i < count; i++) {
+        XrRenderModelCreateInfoEXT mci;
+        memset(&mci, 0, sizeof mci);
+        mci.type = XR_TYPE_RENDER_MODEL_CREATE_INFO_EXT;
+        mci.renderModelId = ids[i];
+        XrRenderModelEXT model = XR_NULL_HANDLE;
+        if (XR_FAILED(g_pCreateModel(g_session, &mci, &model))) continue;
+        if (!modelIsForHand(model, want)) {
+            g_pDestroyModel(model);
+            continue;
+        }
+
+        XrRenderModelPropertiesGetInfoEXT pgi;
+        memset(&pgi, 0, sizeof pgi);
+        pgi.type = XR_TYPE_RENDER_MODEL_PROPERTIES_GET_INFO_EXT;
+        XrRenderModelPropertiesEXT props;
+        memset(&props, 0, sizeof props);
+        props.type = XR_TYPE_RENDER_MODEL_PROPERTIES_EXT;
+        if (XR_FAILED(g_pModelProps(model, &pgi, &props))) {
+            g_pDestroyModel(model);
+            snprintf(err, errlen, "render model properties failed");
+            return nullptr;
+        }
+
+        XrRenderModelAssetCreateInfoEXT aci;
+        memset(&aci, 0, sizeof aci);
+        aci.type = XR_TYPE_RENDER_MODEL_ASSET_CREATE_INFO_EXT;
+        aci.cacheId = props.cacheId;
+        XrRenderModelAssetEXT asset = XR_NULL_HANDLE;
+        if (XR_FAILED(g_pCreateAsset(g_session, &aci, &asset))) {
+            g_pDestroyModel(model);
+            snprintf(err, errlen, "render model asset failed");
+            return nullptr;
+        }
+
+        XrRenderModelAssetDataGetInfoEXT dgi;
+        memset(&dgi, 0, sizeof dgi);
+        dgi.type = XR_TYPE_RENDER_MODEL_ASSET_DATA_GET_INFO_EXT;
+        XrRenderModelAssetDataEXT size;
+        memset(&size, 0, sizeof size);
+        size.type = XR_TYPE_RENDER_MODEL_ASSET_DATA_EXT;
+        if (XR_FAILED(g_pModelAssetData(asset, &dgi, &size)) || size.bufferCountOutput == 0) {
+            g_pDestroyAsset(asset);
+            g_pDestroyModel(model);
+            snprintf(err, errlen, "render model asset has no data");
+            return nullptr;
+        }
+        unsigned char *buf = static_cast<unsigned char *>(malloc(size.bufferCountOutput));
+        if (buf == nullptr) {
+            g_pDestroyAsset(asset);
+            g_pDestroyModel(model);
+            snprintf(err, errlen, "out of memory (%u bytes)", size.bufferCountOutput);
+            return nullptr;
+        }
+        XrRenderModelAssetDataEXT data;
+        memset(&data, 0, sizeof data);
+        data.type = XR_TYPE_RENDER_MODEL_ASSET_DATA_EXT;
+        data.bufferCapacityInput = size.bufferCountOutput;
+        data.buffer = buf;
+        XrResult r = g_pModelAssetData(asset, &dgi, &data);
+        g_pDestroyAsset(asset);
+        if (XR_FAILED(r)) {
+            g_pDestroyModel(model);
+            free(buf);
+            snprintf(err, errlen, "render model asset read failed");
+            return nullptr;
+        }
+        // Keep the model: its space is what tells us where the mesh sits
+        // relative to the grip pose, so the drawing code does not have to
+        // guess an offset.
+        XrRenderModelSpaceCreateInfoEXT sci2;
+        memset(&sci2, 0, sizeof sci2);
+        sci2.type = XR_TYPE_RENDER_MODEL_SPACE_CREATE_INFO_EXT;
+        sci2.renderModel = model;
+        PFN_xrCreateRenderModelSpaceEXT createSpace =
+            reinterpret_cast<PFN_xrCreateRenderModelSpaceEXT>(
+                xrGetInstanceProcAddrWrapper("xrCreateRenderModelSpaceEXT"));
+        if (createSpace != nullptr &&
+            XR_SUCCEEDED(createSpace(g_session, &sci2, &g_modelSpace[hand]))) {
+            g_model[hand] = model;
+        } else {
+            g_pDestroyModel(model);
+        }
+        if (out_len) *out_len = static_cast<int>(data.bufferCountOutput);
+        return buf;
+    }
+
+    snprintf(err, errlen, "no render model for %s", want);
+    return nullptr;
 }
 
 int xr_end_frame(double display_time) {
