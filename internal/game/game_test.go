@@ -296,26 +296,56 @@ func TestKnockbackRetreatsIntoTheHole(t *testing.T) {
 	}
 }
 
-// A combo that swallows the whole chain must end the recoil at once and lay a
-// fresh chain, so the table never sits empty waiting for the impulse to decay.
-func TestFullChainIntoHoleRefillsImmediately(t *testing.T) {
+// A combo that swallows the whole chain ends the recoil when the last bead has
+// gone in, and the chain then has to grow back bead by bead out of the hole --
+// never as a whole chain appearing at once.
+func TestFullChainIntoHoleTricklesBack(t *testing.T) {
 	g := New(1)
-	g.Queue = nil
 	g.Shots = nil
 	g.Balls = []Ball{{S: 0.02, Color: 0, ID: 1}, {S: 0.01, Color: 1, ID: 2}}
+	queued := []int{2, 1, 0}
+	g.Queue = append([]int(nil), queued...)
 	g.KnockVel = -6
-	for i := 0; i < 120; i++ {
+
+	// One frame of Update while playing: feed the queue, then move the chain.
+	frame := func() {
+		g.spawn()
 		g.stepChain(1.0 / 60.0)
 	}
+
+	g.stepChain(1.0 / 60.0) // the recoil swallows the two beads
 	if g.KnockVel != 0 {
 		t.Fatalf("recoil should stop when the chain is gone, got %v", g.KnockVel)
 	}
-	if len(g.Balls) < 2 {
-		t.Fatalf("expected a fresh chain, got %d beads", len(g.Balls))
+	if len(g.Balls) != 0 {
+		t.Fatalf("chain should be empty inside the hole, got %d beads", len(g.Balls))
+	}
+	if len(g.Queue) != len(queued)+2 {
+		t.Fatalf("beads should return to the queue: %d, want %d", len(g.Queue), len(queued)+2)
+	}
+
+	prev := 0
+	grew := 0
+	for i := 0; i < 300; i++ {
+		frame()
+		n := len(g.Balls)
+		if n > prev+1 {
+			t.Fatalf("chain jumped from %d to %d beads in one frame", prev, n)
+		}
+		if n > prev {
+			grew++
+		}
+		prev = n
+	}
+	if grew < 3 {
+		t.Fatalf("chain only grew %d times; beads did not come out one by one", grew)
+	}
+	if len(g.Balls) < 3 {
+		t.Fatalf("chain never grew back, %d beads after 5 s", len(g.Balls))
 	}
 	for _, b := range g.Balls {
 		if b.S < 0 {
-			t.Fatalf("fresh chain still sits inside the hole: %v", b.S)
+			t.Fatalf("bead still sits inside the hole: %v", b.S)
 		}
 	}
 }

@@ -259,8 +259,24 @@ func (g *Game) allBeadsInHole() bool {
 	return true
 }
 
+// refillFromHole strips a chain that a combo shoved entirely into the entrance
+// hole and puts its beads back in the queue. spawn() then feeds them out one at
+// a time, so the table refills bead by bead and keeps the same bead count.
+func (g *Game) refillFromHole() {
+	colours := make([]int, 0, len(g.Balls)+len(g.Queue))
+	for _, b := range g.Balls {
+		colours = append(colours, b.Color)
+	}
+	g.Balls = nil
+	g.KnockVel = 0
+	g.pendingKnock = 0
+	g.Combo = 0
+	g.pendingAhead = -1
+	g.Queue = append(colours, g.Queue...)
+}
+
 // colourOnBoard reports whether a colour still has beads that can be matched:
-// either on the chain or in flight.
+// on the chain, in flight, or still queued in the hole waiting to come out.
 func (g *Game) colourOnBoard(c, n int) bool {
 	if c < 0 || c >= n {
 		return false
@@ -561,17 +577,16 @@ func (g *Game) stepChain(dt float32) {
 		for i := range g.Balls {
 			g.Balls[i].S += shift
 		}
-		// Every bead pushed into the hole: stop the recoil right here and lay
-		// a fresh chain, instead of leaving the table empty while it decays.
+		// Every bead pushed into the hole: the recoil has played out and the
+		// table is empty. The beads go back in the queue so they dribble out of
+		// the hole one at a time instead of a whole chain appearing at once.
 		if g.allBeadsInHole() {
+			g.refillFromHole()
+			return
+		}
+		g.KnockVel *= float32(math.Exp(-6.0 * float64(dt)))
+		if g.KnockVel > -0.02 && g.KnockVel < 0.02 {
 			g.KnockVel = 0
-			g.pendingKnock = 0
-			g.spawnChain()
-		} else {
-			g.KnockVel *= float32(math.Exp(-6.0 * float64(dt)))
-			if g.KnockVel > -0.02 && g.KnockVel < 0.02 {
-				g.KnockVel = 0
-			}
 		}
 	} else if g.State != StatePlaying {
 		g.KnockVel = 0
