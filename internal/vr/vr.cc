@@ -17,7 +17,6 @@ vr::TrackedDevicePose_t g_poses[vr::k_unMaxTrackedDeviceCount];
 // Input-only clients never present: OpenXR owns the display, so SteamVR is
 // brought up as a background app and poses come from the system pose API
 // rather than the compositor's frame loop.
-bool g_inputOnly = false;
 
 // Action handles from the app manifest. Once an app loads a manifest SteamVR
 // stops serving legacy controller state, so every button and axis govr needs
@@ -60,9 +59,7 @@ extern "C" {
 
 int govr_vr_present(void) { return vr::VR_IsHmdPresent() ? 1 : 0; }
 
-int govr_vr_init(char *err, int errlen) { return govr_vr_init_mode(0, err, errlen); }
-
-int govr_vr_init_mode(int inputOnly, char *err, int errlen) {
+int govr_vr_init(char *err, int errlen) {
     if (err != nullptr && errlen > 0) {
         err[0] = '\0';
     }
@@ -71,9 +68,8 @@ int govr_vr_init_mode(int inputOnly, char *err, int errlen) {
         return 1;
     }
 
-    g_inputOnly = inputOnly != 0;
     vr::EVRInitError e = vr::VRInitError_None;
-    g_sys = vr::VR_Init(&e, g_inputOnly ? vr::VRApplication_Background : vr::VRApplication_Scene);
+    g_sys = vr::VR_Init(&e, vr::VRApplication_Scene);
     if (e != vr::VRInitError_None) {
         snprintf(err, static_cast<size_t>(errlen), "%s",
                  vr::VR_GetVRInitErrorAsEnglishDescription(e));
@@ -83,7 +79,7 @@ int govr_vr_init_mode(int inputOnly, char *err, int errlen) {
 
     g_models = vr::VRRenderModels();
     g_comp = vr::VRCompositor();
-    if (g_comp == nullptr && !g_inputOnly) {
+    if (g_comp == nullptr) {
         snprintf(err, static_cast<size_t>(errlen), "compositor unavailable");
         return 3;
     }
@@ -370,15 +366,6 @@ int govr_vr_wait_poses(void) {
         return -1;
     }
     vr::TrackedDevicePose_t poses[vr::k_unMaxTrackedDeviceCount];
-    if (g_inputOnly || g_comp == nullptr) {
-        // Background apps are not part of the compositor's frame loop, so ask
-        // the system for this instant's poses instead of waiting on a frame
-        // that will never be scheduled for us.
-        g_sys->GetDeviceToAbsoluteTrackingPose(vr::TrackingUniverseStanding, 0.0f, poses,
-                                               vr::k_unMaxTrackedDeviceCount);
-        memcpy(g_poses, poses, sizeof(poses));
-        return 0;
-    }
     const vr::EVRCompositorError e =
         g_comp->WaitGetPoses(poses, vr::k_unMaxTrackedDeviceCount, nullptr, 0);
     if (e != vr::VRCompositorError_None) {

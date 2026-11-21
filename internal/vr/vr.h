@@ -15,7 +15,6 @@ int govr_vr_init(char *err, int errlen);
 /* Same, but inputOnly brings SteamVR up as a background app: no compositor
  * frame loop, poses read straight from IVRSystem. Used when an OpenXR session
  * owns the display. */
-int govr_vr_init_mode(int inputOnly, char *err, int errlen);
 void govr_vr_shutdown(void);
 
 /* Loads the SteamVR action manifest that binds app actions to buttons the

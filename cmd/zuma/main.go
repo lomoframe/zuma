@@ -236,7 +236,7 @@ func main() {
 	} else {
 		log.Printf("desktop view")
 	}
-	if !a.vrOn {
+	if !a.vrOn && !a.xrOn {
 		glfw.SwapInterval(1)
 	}
 
@@ -332,8 +332,10 @@ func main() {
 				if !xr.SyncInput(t) {
 					log.Printf("xrSyncActions failed")
 				}
-				if err := vr.WaitPoses(); err != nil {
-					log.Printf("WaitGetPoses: %v", err)
+				if a.vrOn {
+					if err := vr.WaitPoses(); err != nil {
+						log.Printf("WaitGetPoses: %v", err)
+					}
 				}
 				a.updateVRAim(now)
 			}
@@ -422,22 +424,21 @@ func main() {
 // the main loop so the game can start before a wireless headset finishes
 // connecting.
 func (a *app) enableVR() bool {
-	if !vr.Present() {
-		return false
-	}
 	if a.wantXR && !a.xrOn {
 		if err := a.startXR(); err != nil {
 			log.Printf("OpenXR unavailable (%v) — falling back to OpenVR presentation", err)
 		}
 	}
+	// With XR up, SteamVR must not be attached at all. An OpenVR client sitting
+	// next to the XR session makes the runtime apply "reset centre" to the world
+	// twice, so every recentre doubles the offset between the game world and the
+	// room. Poses and buttons all come from the OpenXR actions instead.
+	if !a.xrOn && !vr.Present() {
+		return false
+	}
 
 	var err error
-	if a.xrOn {
-		// OpenXR owns the display, so SteamVR is only an input client here:
-		// background mode keeps poses, buttons and render models without
-		// making the compositor wait on a second presenting app.
-		err = vr.InitInputOnly()
-	} else {
+	if !a.xrOn {
 		err = vr.Init()
 	}
 	if err != nil {
@@ -452,13 +453,15 @@ func (a *app) enableVR() bool {
 		}
 		return false
 	}
-	a.vrOn = true
+	a.vrOn = !a.xrOn
 
-	ew, eh := vr.RenderTargetSize()
+	ew, eh := int32(0), int32(0)
 	format := gl.RGBA8
 	if a.xrOn {
 		ew, eh = xr.Size()
 		format = xr.Format()
+	} else {
+		ew, eh = vr.RenderTargetSize()
 	}
 	for eye := 0; eye < 2; eye++ {
 		rt, err := gl.NewRenderTargetFormat(ew, eh, a.msaa, format)
@@ -469,8 +472,8 @@ func (a *app) enableVR() bool {
 	}
 	glfw.SwapInterval(0)
 	if a.xrOn {
-		log.Printf("OpenXR active: %dx%d per eye, msaa %dx, blend %d format 0x%x (passthrough %v)", ew, eh, a.msaa,
-			xr.BlendMode(), format, a.xrPassthrough)
+		log.Printf("OpenXR active: %dx%d per eye, msaa %dx, blend %d format 0x%x (passthrough %v, single client)",
+			ew, eh, a.msaa, xr.BlendMode(), format, a.xrPassthrough)
 	} else {
 		log.Printf("VR active: %dx%d per eye, msaa %dx", ew, eh, a.msaa)
 	}
@@ -785,12 +788,17 @@ func (a *app) leftStick() (vr.ControllerState, bool) {
 // controller is tracked it falls back to the head gaze, so a laser is always
 // visible in the headset.
 func (a *app) updateVRAim(now float64) {
-	dev, st, ok := vr.Controller(vr.RightHand)
-	if !ok {
-		for _, d := range vr.ControllerDevices() {
-			if s, sok := vr.ControllerAt(uint32(d)); sok {
-				dev, st, ok = uint32(d), s, true
-				break
+	var dev uint32
+	var st vr.ControllerState
+	var ok bool
+	if !a.xrOn {
+		dev, st, ok = vr.Controller(vr.RightHand)
+		if !ok {
+			for _, d := range vr.ControllerDevices() {
+				if s, sok := vr.ControllerAt(uint32(d)); sok {
+					dev, st, ok = uint32(d), s, true
+					break
+				}
 			}
 		}
 	}

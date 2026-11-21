@@ -76,18 +76,6 @@ func Init() error {
 	return nil
 }
 
-// InitInputOnly brings SteamVR up as a background client: tracking, buttons
-// and render models stay available, but the app never presents. Used when an
-// OpenXR session drives the headset instead.
-func InitInputOnly() error {
-	buf := C.malloc(512)
-	defer C.free(buf)
-	if code := C.govr_vr_init_mode(1, (*C.char)(buf), 512); code != 0 {
-		return fmt.Errorf("%s", C.GoString((*C.char)(buf)))
-	}
-	return nil
-}
-
 func Shutdown() { C.govr_vr_shutdown() }
 
 // InitActions loads the SteamVR action manifest that binds app actions such
