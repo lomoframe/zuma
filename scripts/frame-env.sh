@@ -20,7 +20,14 @@ if [ -n "$sysroot" ] && [ -d "$sysroot/usr/lib" ]; then
 	# vr::CleanupInternalInterfaces for the SteamVR runtime to provide.
 	# The OpenXR loader only exists in SteamVR's bin dir, which Steam does not
 	# put on LD_LIBRARY_PATH, so that path is baked in as well.
-	CGO_LDFLAGS="-L$sysroot/usr/lib -Wl,-rpath-link,$sysroot/usr/lib -Wl,-rpath,\$ORIGIN -Wl,-rpath,/opt/steamvr/bin/linuxarm64 -Wl,--allow-shlib-undefined -Wl,--gc-sections -Wl,--as-needed"
+	# The device ships libGLEW.so.2.2 (SONAME libGLEW.so.2.2) while the sysroot has
+	# 2.3. A copy of the device 2.2 lives in ~/.local/glew22 so -lGLEW resolves to
+	# it first: the binary then needs a SONAME the headset already provides, and no
+	# GLEW has to be shipped next to it.
+	glew22=${GLEW22_DIR:-$HOME/.local/glew22}
+	glew_ldflag=""
+	[ -f "$glew22/libGLEW.so" ] && glew_ldflag="-L$glew22"
+	CGO_LDFLAGS="$glew_ldflag -L$sysroot/usr/lib -Wl,-rpath-link,$sysroot/usr/lib -Wl,-rpath,\$ORIGIN -Wl,-rpath,/opt/steamvr/bin/linuxarm64 -Wl,--allow-shlib-undefined -Wl,--gc-sections -Wl,--as-needed"
 	PKG_CONFIG_SYSROOT_DIR="$sysroot"
 	PKG_CONFIG_LIBDIR="$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig"
 	export CGO_CFLAGS CGO_CXXFLAGS CGO_LDFLAGS PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_LIBDIR

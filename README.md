@@ -10,6 +10,8 @@ arc, a cyan beam shows where they will land, and runs of three or more pop.
 Clear the board to advance; let the head of the chain reach the hole and the
 round is over.
 
+![Title screen](docs/title.png)
+
 ![Aiming from the right controller](docs/vr-hero.png)
 
 Everything is procedural — meshes, the carved groove, the board shapes, the
@@ -45,14 +47,6 @@ start-up.
 
 *(Documentation shots are rendered by the same path with `-vrcam`, which poses
 the right hand and its beam.)*
-
-### Title screen
-
-The title page is a painted poster generated at build time, anchored in the room
-so it stays put when you look around. The bead chain runs along the same spiral
-as the art and drains into the hole at its inner end.
-
-![Title screen](docs/title.png)
 
 ## Controls
 
@@ -155,6 +149,9 @@ ssh frame 'cd ~/Games/zuma && DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/1000 \
 
 The log prints `VR active: 1728x1728 per eye, msaa 4x`, a per-level
 `board …: tilt …, felt near/centre/far …` line, and a once-a-second pose line.
+Only the binary is shipped: `make frame` links against the headset's own
+`libGLEW.so.2.2` (copied to `~/.local/glew22`, override with `GLEW22_DIR`) so
+its `NEEDED` entry matches the system library and no `.so` sits next to it.
 
 ### PC (development / mirror)
 
@@ -229,9 +226,8 @@ changing any on-screen text.
   盘形与线路（每关同权重重抽、守门条件不变）、连击击退都不随关卡变化，所以
   第 7 关球数、第 5 关颜色、第 16 关链速到顶之后曲线是平的，后段难度更多来自
   随机盘面的运气（线路越短、越早被填满）。
-- 标题页是一张构建期生成的程序化海报，锚在房间里固定坐标；球链沿画里的螺旋跑进末端洞口。
 - 全部资源程序化生成（网格、凹槽、盘形、标题页海报、字体子集、音效），
   只有一个可执行文件。
 
 构建：`make desktop`（窗口）/ `make run`（有头显即进 VR）/ `make frame`（头显
-ARM64）/ `make test`。仓库：[github.com/lomoalbert/zumaframe](https://github.com/lomoalbert/zumaframe)。
+ARM64）/ `make test`。
