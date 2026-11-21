@@ -269,23 +269,54 @@ func TestKnockbackRetreatsIntoTheHole(t *testing.T) {
 	g := New(1)
 	g.Queue = nil
 	g.Shots = nil
-	g.Balls = []Ball{{S: 0.05, Color: 0, ID: 1}}
+	// A chain long enough that only its tail can reach the entrance.
+	g.Balls = []Ball{
+		{S: 0.05 + 4*Diam, Color: 0, ID: 1},
+		{S: 0.05 + 3*Diam, Color: 1, ID: 2},
+		{S: 0.05 + 2*Diam, Color: 2, ID: 3},
+		{S: 0.05 + Diam, Color: 0, ID: 4},
+		{S: 0.05, Color: 1, ID: 5},
+	}
 	g.KnockVel = -3
 	retreated := false
 	for i := 0; i < 240; i++ {
 		g.stepChain(1.0 / 60.0)
-		if g.Balls[0].S < 0 {
+		if g.Balls[len(g.Balls)-1].S < 0 {
 			retreated = true
 		}
-		if g.Balls[0].S < -knockRetreat-1e-4 {
-			t.Fatalf("chain retreated past the hole: %v", g.Balls[0].S)
+		if g.Balls[len(g.Balls)-1].S < -knockRetreat-1e-4 {
+			t.Fatalf("chain retreated past the hole: %v", g.Balls[len(g.Balls)-1].S)
 		}
 	}
 	if !retreated {
-		t.Fatalf("combo knock must push the tail into the hole, tail stayed at %v", g.Balls[0].S)
+		t.Fatalf("combo knock must push the tail into the hole, tail stayed at %v", g.Balls[len(g.Balls)-1].S)
 	}
 	if g.KnockVel != 0 {
 		t.Fatalf("recoil never settled: %v", g.KnockVel)
+	}
+}
+
+// A combo that swallows the whole chain must end the recoil at once and lay a
+// fresh chain, so the table never sits empty waiting for the impulse to decay.
+func TestFullChainIntoHoleRefillsImmediately(t *testing.T) {
+	g := New(1)
+	g.Queue = nil
+	g.Shots = nil
+	g.Balls = []Ball{{S: 0.02, Color: 0, ID: 1}, {S: 0.01, Color: 1, ID: 2}}
+	g.KnockVel = -6
+	for i := 0; i < 120; i++ {
+		g.stepChain(1.0 / 60.0)
+	}
+	if g.KnockVel != 0 {
+		t.Fatalf("recoil should stop when the chain is gone, got %v", g.KnockVel)
+	}
+	if len(g.Balls) < 2 {
+		t.Fatalf("expected a fresh chain, got %d beads", len(g.Balls))
+	}
+	for _, b := range g.Balls {
+		if b.S < 0 {
+			t.Fatalf("fresh chain still sits inside the hole: %v", b.S)
+		}
 	}
 }
 

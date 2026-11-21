@@ -197,6 +197,18 @@ func (g *Game) startLevel() {
 	g.loseT = 0
 	g.Flash = 0
 	g.KnockVel = 0
+	g.spawnChain()
+}
+
+// spawnChain lays out a fresh bead chain on the current board. It is used when a
+// level starts and when a full combo shoves every bead back into the hole, so
+// the table never sits empty while the recoil decays.
+func (g *Game) spawnChain() {
+	spec := g.LevelSpec
+	g.Balls = nil
+	g.Combo = 0
+	g.pendingAhead = -1
+	g.KnockVel = 0
 	g.pendingKnock = 0
 
 	prefill := 16 + 2*(g.Level-1)
@@ -232,6 +244,19 @@ func (g *Game) randColor(n int) int {
 		n = 1
 	}
 	return g.Rng.Intn(n)
+}
+
+// allBeadsInHole reports whether the whole chain sits behind the entrance.
+func (g *Game) allBeadsInHole() bool {
+	if len(g.Balls) == 0 {
+		return false
+	}
+	for _, b := range g.Balls {
+		if b.S >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // colourOnBoard reports whether a colour still has beads that can be matched:
@@ -536,9 +561,17 @@ func (g *Game) stepChain(dt float32) {
 		for i := range g.Balls {
 			g.Balls[i].S += shift
 		}
-		g.KnockVel *= float32(math.Exp(-6.0 * float64(dt)))
-		if g.KnockVel > -0.02 && g.KnockVel < 0.02 {
+		// Every bead pushed into the hole: stop the recoil right here and lay
+		// a fresh chain, instead of leaving the table empty while it decays.
+		if g.allBeadsInHole() {
 			g.KnockVel = 0
+			g.pendingKnock = 0
+			g.spawnChain()
+		} else {
+			g.KnockVel *= float32(math.Exp(-6.0 * float64(dt)))
+			if g.KnockVel > -0.02 && g.KnockVel < 0.02 {
+				g.KnockVel = 0
+			}
 		}
 	} else if g.State != StatePlaying {
 		g.KnockVel = 0
@@ -567,8 +600,8 @@ func (g *Game) stepChain(dt float32) {
 			if lim := ahead.S - Diam; cur.S > lim {
 				cur.S = lim
 			}
-			if cur.S < 0 {
-				cur.S = 0
+			if cur.S < -knockRetreat {
+				cur.S = -knockRetreat
 			}
 		}
 	case g.pendingAhead >= 0 && g.State == StatePlaying:
