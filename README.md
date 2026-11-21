@@ -156,6 +156,23 @@ Only the binary is shipped: `make frame` links against the headset's own
 `libGLEW.so.2.2` (copied to `~/.local/glew22`, override with `GLEW22_DIR`) so
 its `NEEDED` entry matches the system library and no `.so` sits next to it.
 
+### Release artifacts
+
+```sh
+make release     # -> dist/zuma-linux-arm64 (plain binary) and dist/zuma-linux-arm64.AppImage
+```
+
+Names carry project, OS and CPU. The AppImage is the same program with the two
+libraries SteamOS does not ship next to it (OpenAL and the headset's
+`libGLEW.so.2.2`, both copied off the device so their glibc requirements match
+it); GL, X11, libstdc++ and glibc still come from the host. SteamOS has no
+libfuse2, so run it with `./zuma-linux-arm64.AppImage --appimage-extract-and-run`.
+Two inputs come off the headset rather than the sysroot, because the sysroot's
+copies are built against a newer glibc than the device has: `libGLEW.so.2.2` in
+`~/.local/glew22` (override `GLEW22_DIR`) and `libopenal.so.1` in
+`~/.local/frame-libs` (override `FRAME_LIBDIR`, e.g.
+`scp frame:/usr/lib/libopenal.so.1.23.1 ~/.local/frame-libs/libopenal.so.1`).
+
 ### PC (development / mirror)
 
 ```sh
@@ -233,4 +250,7 @@ changing any on-screen text.
   只有一个可执行文件。
 
 构建：`make desktop`（窗口）/ `make run`（有头显即进 VR）/ `make frame`（头显
-ARM64）/ `make test`。
+ARM64）/ `make test`；发布用 `make release`，产出 `dist/zuma-linux-arm64` 与
+`dist/zuma-linux-arm64.AppImage`（AppImage 只带 SteamOS 没随程序提供的两个库：
+OpenAL 与设备的 `libGLEW.so.2.2`，都从设备上拷贝以保证 glibc 需求匹配；
+SteamOS 没有 libfuse2，要用 `--appimage-extract-and-run` 启动）。

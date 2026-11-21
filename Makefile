@@ -6,7 +6,7 @@ SIZE_CFLAGS := -O2 -g0 -ffunction-sections -fdata-sections
 SIZE_GOFLAGS := -trimpath -buildvcs=false
 SIZE_LDFLAGS := -s -w -buildid= -extldflags=-Wl,--gc-sections
 
-.PHONY: build run desktop shot win lose frame test vet font splash clean
+.PHONY: build run desktop shot win lose frame test vet font splash clean release appimage-arm64 deploy
 
 build:
 	CGO_CFLAGS="$(SIZE_CFLAGS)" CGO_CXXFLAGS="$(SIZE_CFLAGS)" \
@@ -45,6 +45,34 @@ frame:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=$(CC_ARM64) CXX=$(CXX_ARM64) \
 		./scripts/frame-env.sh "$(SYS_ARM64)" \
 		go build $(SIZE_GOFLAGS) -ldflags "$(SIZE_LDFLAGS)" -o bin/zuma-frame ./cmd/zuma
+
+# Publishable artifacts, named after project + OS + CPU: dist/zuma-linux-arm64
+# is the plain headset binary, dist/zuma-linux-arm64.AppImage is the same program
+# with the libraries SteamOS does not ship next to it (OpenAL, GLEW, libstdc++).
+DIST := dist
+GLEW22_DIR ?= $(HOME)/.local/glew22
+
+release: appimage-arm64
+
+appimage-arm64: frame
+	mkdir -p $(DIST)
+	cp bin/zuma-frame $(DIST)/zuma-linux-arm64
+	GLEW22_DIR=$(GLEW22_DIR) \
+		./scripts/build-appimage.sh arm64 $(DIST)/zuma-linux-arm64 $(DIST)/zuma-linux-arm64.AppImage
+
+# Deploys the published files under their release names -- no renaming on the
+# way to the headset. The running copies are stopped first: overwriting a live
+# executable fails with ETXTBSY, and the AppImage mounts itself from the file.
+FRAME_HOST ?= frame
+FRAME_DIR  ?= Games/zuma
+
+deploy: release
+	ssh $(FRAME_HOST) 'mkdir -p ~/$(FRAME_DIR)'
+	-ssh $(FRAME_HOST) 'pkill -x zuma; pkill -x zuma-linux-arm6; sleep 1'
+	scp $(DIST)/zuma-linux-arm64 $(DIST)/zuma-linux-arm64.AppImage $(FRAME_HOST):$(FRAME_DIR)/
+	ssh $(FRAME_HOST) 'chmod +x ~/$(FRAME_DIR)/zuma-linux-arm64 ~/$(FRAME_DIR)/zuma-linux-arm64.AppImage'
+	@sha256sum $(DIST)/zuma-linux-arm64 $(DIST)/zuma-linux-arm64.AppImage
+	ssh $(FRAME_HOST) 'sha256sum ~/$(FRAME_DIR)/zuma-linux-arm64 ~/$(FRAME_DIR)/zuma-linux-arm64.AppImage'
 
 test:
 	go test ./...
